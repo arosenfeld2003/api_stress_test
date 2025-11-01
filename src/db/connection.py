@@ -8,8 +8,25 @@ from typing import Iterator, Optional
 import duckdb
 from dotenv import load_dotenv
 
-# Load variables from .env if present
-load_dotenv(override=False)
+# Load variables from .env if present (robust across working directories)
+from typing import Optional as _OptionalTyp
+
+def _load_env() -> None:
+    """Load .env from both CWD chain and repo root if present without overriding real env.
+    This allows storing MOTHERDUCK_TOKEN (and others) in a local .env for development.
+    """
+    try:
+        # Load from current working directory upward (finds repo root in most cases)
+        load_dotenv(override=False)
+        # Additionally load .env relative to the repository root inferred from this file
+        root_env = Path(__file__).resolve().parents[2] / ".env"
+        if root_env.exists():
+            load_dotenv(dotenv_path=root_env, override=False)
+    except Exception:
+        # Fail-open: environment loading should never break runtime
+        pass
+
+_load_env()
 
 DEFAULT_LOCAL_PATH = "./data/app.duckdb"
 
