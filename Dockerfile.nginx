@@ -1,0 +1,16 @@
+# Nginx reverse proxy container for API Stress Test
+FROM nginx:alpine
+
+# Copy nginx configuration (using local version for testing without SSL)
+# For production with SSL, deploy nginx.conf after container is running
+COPY nginx.conf.local /etc/nginx/conf.d/default.conf
+
+# Create directories for SSL certificates (optional, for future use)
+RUN mkdir -p /etc/letsencrypt/live/myapi.example.com
+
+# Expose ports
+EXPOSE 80 443
+
+# Start nginx
+CMD ["nginx", "-g", "daemon off;"]
+

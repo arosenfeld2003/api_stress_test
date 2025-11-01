@@ -1,0 +1,42 @@
+# ----------------------------
+# Rate Limiting & Connection Limits (must be at http level)
+# ----------------------------
+limit_req_zone $binary_remote_addr zone=api_limit:10m rate=5r/s;
+limit_conn_zone $binary_remote_addr zone=conn_limit:10m;
+
+# ----------------------------
+# HTTP Flask reverse proxy (for local testing without SSL)
+# ----------------------------
+server {
+    listen 80;
+    server_name localhost;
+
+    # --- Timeouts to prevent slowloris (must be at server level) ---
+    client_body_timeout 5s;
+    client_header_timeout 5s;
+    keepalive_timeout 15s;
+    send_timeout 10s;
+
+    # --- Body size restriction ---
+    client_max_body_size 2M;
+
+    location / {
+        proxy_pass http://host.docker.internal:5001;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+
+        # --- Rate limiting (5 req/s, burst of 10) ---
+        limit_req zone=api_limit burst=10 nodelay;
+        limit_req_status 429;
+
+        # --- Limit concurrent connections per IP (20) ---
+        limit_conn conn_limit 20;
+
+        # --- Security Headers (even for HTTP) ---
+        add_header X-Content-Type-Options nosniff;
+        add_header X-Frame-Options DENY;
+        add_header X-XSS-Protection "1; mode=block";
+    }
+}
+

@@ -151,22 +151,48 @@ This creates the `warrior` table and necessary indexes in `./data/app.duckdb`.
 
 This application **must** be run through the GHCR nginx container to enable dual-layer rate limiting (nginx + Flask). Direct access to the Flask app bypasses the nginx rate limiter and is not supported for testing.
 
-### 1. Pull and Run Nginx Container from GHCR
+### 1. Build and Run Nginx Container
+
+**If the image doesn't exist in GHCR, build it locally first:**
+
+```bash
+# Build nginx image locally
+./scripts/build_nginx_image.sh
+
+# Run container (macOS/Windows with Docker Desktop)
+docker run -d \
+  --name api_stress_test_nginx \
+  -p 443:443 \
+  -p 80:80 \
+  ghcr.io/arosenfeld2003/api-stress-test-nginx:latest
+```
+
+**Alternatively, if the image is already in GHCR:**
 
 ```bash
 # Pull nginx container
-docker pull ghcr.io/your-org/api-stress-test-nginx:latest
+docker pull ghcr.io/arosenfeld2003/api-stress-test-nginx:latest
 
-# Run container
+# Run container (macOS/Windows with Docker Desktop)
+docker run -d \
+  --name api_stress_test_nginx \
+  -p 443:443 \
+  -p 80:80 \
+  ghcr.io/arosenfeld2003/api-stress-test-nginx:latest
+
+# For Linux (use --network host instead)
 docker run -d \
   --name api_stress_test_nginx \
   -p 443:443 \
   -p 80:80 \
   --network host \
-  ghcr.io/your-org/api-stress-test-nginx:latest
+  ghcr.io/arosenfeld2003/api-stress-test-nginx:latest
 ```
 
-**Note:** The `--network host` flag allows nginx to connect to Flask on `localhost:5001`. For production deployments, use a Docker network instead.
+**Note:** 
+- On **macOS/Windows** (Docker Desktop): Use port mapping only (no `--network host`). The nginx config uses `host.docker.internal` to reach Flask on the host.
+- On **Linux**: You can use `--network host` to allow nginx to connect to Flask on `localhost:5001`.
+- For production deployments, use a Docker network instead.
 
 ### 2. Deploy Nginx Configuration
 
