@@ -13,8 +13,9 @@ import sys
 import random
 import uuid
 
-BASE_URL = "http://localhost:5001"
-DEFAULT_LIMIT = 100  # requests per minute
+BASE_URL = "http://localhost:80"  # Use nginx proxy, not direct Flask
+DEFAULT_LIMIT = 100  # requests per minute (Flask limit)
+NGINX_LIMIT = 5  # requests per second (Nginx limit)
 
 # Warrior endpoints to test
 ENDPOINTS = {
@@ -253,8 +254,10 @@ def check_endpoint():
     except requests.exceptions.ConnectionError as e:
         print(f"❌ Cannot connect to API at {BASE_URL}")
         print(f"   Error: {e}")
-        print(f"\n   Make sure the Flask app is running:")
-        print(f"   python limiter.py")
+        print(f"\n   Make sure:")
+        print(f"   1. Nginx container is running: docker ps | grep api_stress_test_nginx")
+        print(f"   2. Nginx config is deployed: ./scripts/deploy_nginx_config.sh")
+        print(f"   3. Flask app is running: python limiter.py")
         return False
     except Exception as e:
         print(f"❌ Error checking endpoints: {e}")
@@ -269,8 +272,9 @@ def main():
     if not check_endpoint():
         sys.exit(1)
     
-    print(f"✓ API is reachable at {BASE_URL}")
-    print(f"  Flask limit: {DEFAULT_LIMIT} requests per minute")
+    print(f"✓ API is reachable at {BASE_URL} (via nginx proxy)")
+    print(f"  Nginx limit: {NGINX_LIMIT} requests per second (first defense)")
+    print(f"  Flask limit: {DEFAULT_LIMIT} requests per minute (second defense)")
     print(f"  Testing endpoints:")
     print(f"    - GET /counting-warriors")
     print(f"    - GET /warrior?t={{term}}")
