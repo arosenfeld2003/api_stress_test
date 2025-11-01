@@ -61,6 +61,8 @@ def get_connection(read_only: bool = False, apply_schema: bool = False) -> Itera
       - LOCAL_DUCKDB_PATH: path to .duckdb file (local mode)
       - MOTHERDUCK_TOKEN: MotherDuck auth token (motherduck mode)
       - MOTHERDUCK_DATABASE: target DB name on MotherDuck (optional)
+    
+    Falls back to local mode if MotherDuck connection fails.
     """
     mode = os.getenv("DB_MODE", "local").strip().lower()
 
@@ -74,6 +76,7 @@ def get_connection(read_only: bool = False, apply_schema: bool = False) -> Itera
             _ensure_parent_dir(db_path)
             con = duckdb.connect(db_path, read_only=read_only)
         else:
+            # Try MotherDuck connection, fall back to local if it fails
             token = os.getenv("MOTHERDUCK_TOKEN", "").strip()
             if not token:
                 raise EnvironmentError(
@@ -81,7 +84,18 @@ def get_connection(read_only: bool = False, apply_schema: bool = False) -> Itera
                 )
             # Ensure the token is visible to DuckDB's MotherDuck connector
             os.environ.setdefault("MOTHERDUCK_TOKEN", token)
-            con = duckdb.connect(_motherduck_connect_str(), read_only=read_only)
+            try:
+                con = duckdb.connect(_motherduck_connect_str(), read_only=read_only)
+            except Exception as e:
+                # Fall back to local mode if MotherDuck connection fails
+                import warnings
+                warnings.warn(
+                    f"Failed to connect to MotherDuck ({e}). Falling back to local database.",
+                    UserWarning
+                )
+                db_path = os.getenv("LOCAL_DUCKDB_PATH", DEFAULT_LOCAL_PATH)
+                _ensure_parent_dir(db_path)
+                con = duckdb.connect(db_path, read_only=read_only)
 
         if apply_schema and not read_only:
             _apply_schema(con)
