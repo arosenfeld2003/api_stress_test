@@ -149,31 +149,52 @@ This creates the `warrior` table and necessary indexes in `./data/app.duckdb`.
 
 ## Running the Application
 
-### Option 1: Direct Flask (Development)
+This application **must** be run through the GHCR nginx container to enable dual-layer rate limiting (nginx + Flask). Direct access to the Flask app bypasses the nginx rate limiter and is not supported for testing.
+
+### 1. Build and Run Nginx Container
+
+**If the image doesn't exist in GHCR, build it locally first:**
 
 ```bash
-python limiter.py
-```
+# Build nginx image locally
+./scripts/build_nginx_image.sh
 
-The app will run on `http://localhost:5001`
-
-### Option 2: Through Nginx (Production-like)
-
-1. **Pull and run nginx container from GHCR:**
-
-```bash
-# Pull nginx container (adjust image name/path as needed)
-docker pull ghcr.io/your-org/api-stress-test-nginx:latest
-
-# Run container (adjust image name as needed)
+# Run container (macOS/Windows with Docker Desktop)
 docker run -d \
   --name api_stress_test_nginx \
   -p 443:443 \
   -p 80:80 \
-  ghcr.io/your-org/api-stress-test-nginx:latest
+  ghcr.io/arosenfeld2003/api-stress-test-nginx:latest
 ```
 
-2. **Deploy nginx configuration:**
+**Alternatively, if the image is already in GHCR:**
+
+```bash
+# Pull nginx container
+docker pull ghcr.io/arosenfeld2003/api-stress-test-nginx:latest
+
+# Run container (macOS/Windows with Docker Desktop)
+docker run -d \
+  --name api_stress_test_nginx \
+  -p 443:443 \
+  -p 80:80 \
+  ghcr.io/arosenfeld2003/api-stress-test-nginx:latest
+
+# For Linux (use --network host instead)
+docker run -d \
+  --name api_stress_test_nginx \
+  -p 443:443 \
+  -p 80:80 \
+  --network host \
+  ghcr.io/arosenfeld2003/api-stress-test-nginx:latest
+```
+
+**Note:** 
+- On **macOS/Windows** (Docker Desktop): Use port mapping only (no `--network host`). The nginx config uses `host.docker.internal` to reach Flask on the host.
+- On **Linux**: You can use `--network host` to allow nginx to connect to Flask on `localhost:5001`.
+- For production deployments, use a Docker network instead.
+
+### 2. Deploy Nginx Configuration
 
 ```bash
 # Deploy nginx.conf to container
@@ -185,15 +206,27 @@ This script:
 - Validates the configuration
 - Reloads nginx gracefully
 
-3. **Start Flask app:**
+### 3. Start Flask Application
 
 ```bash
 python limiter.py
 ```
 
-The API will be accessible through nginx at `https://myapi.example.com` (or `http://localhost` if SSL is not configured for local testing).
+The Flask app will run on `localhost:5001` (internal, accessed only by nginx).
 
-**Note:** For local testing without SSL certificates, you may need to modify `nginx.conf` to remove SSL requirements or use a self-signed certificate.
+### 4. Access API Through Nginx
+
+The API is accessible through nginx:
+
+- **HTTP:** `http://localhost:80` (for local testing)
+- **HTTPS:** `https://localhost:443` (requires SSL certificates)
+
+**For local testing without SSL certificates**, you can:
+- Use HTTP on port 80, or
+- Modify `nginx.conf` to remove SSL requirements, or
+- Generate self-signed certificates for testing
+
+The nginx container acts as a reverse proxy and rate limiter, forwarding requests to the Flask app on port 5001.
 
 ### Environment Variables
 
@@ -211,40 +244,46 @@ MOTHERDUCK_DATABASE=api_stress_test
 
 ## Testing
 
+**Important:** All testing must go through the nginx proxy to validate both nginx and Flask rate limiting. Direct access to Flask (port 5001) bypasses the nginx rate limiter.
+
 ### Quick API Test
 
+All requests go through nginx on port 80 (or 443 for HTTPS):
+
 ```bash
-# Health check
-curl http://localhost:5001/health
+# Health check (through nginx)
+curl http://localhost:80/health
 
 # Create a warrior
-curl -X POST http://localhost:5001/warrior \
+curl -X POST http://localhost:80/warrior \
   -H "Content-Type: application/json" \
   -d '{"name": "Master Yoda", "dob": "1970-01-01", "fight_skills": ["BJJ", "KungFu"]}'
 
 # Get warrior (use UUID from previous response)
-curl http://localhost:5001/warrior/{uuid}
+curl http://localhost:80/warrior/{uuid}
 
 # Search warriors
-curl "http://localhost:5001/warrior?t=Yoda"
+curl "http://localhost:80/warrior?t=Yoda"
 
 # Count warriors
-curl http://localhost:5001/counting-warriors
+curl http://localhost:80/counting-warriors
 ```
 
 ### Rate Limiter Tests
 
+All tests go through nginx to validate **both** nginx (5 req/s) and Flask (100 req/min) rate limiters.
+
 #### Option 1: Simple Bash Script
 
 ```bash
-# Basic test (20 requests)
-./scripts/test_rate_limit.sh
+# Basic test (20 requests) - uses nginx endpoint
+./scripts/test_rate_limit.sh http://localhost:80/health 20
 
 # Custom endpoint and requests
-./scripts/test_rate_limit.sh http://localhost:5001/health 50
+./scripts/test_rate_limit.sh http://localhost:80/counting-warriors 50
 
 # Slower requests (not rapid mode)
-./scripts/test_rate_limit.sh http://localhost:5001/health 20 slow
+./scripts/test_rate_limit.sh http://localhost:80/health 20 slow
 ```
 
 #### Option 2: Python Test Suite
@@ -253,14 +292,17 @@ curl http://localhost:5001/counting-warriors
 python test_rate_limiter.py
 ```
 
+**Note:** The test suite is configured to use `http://localhost:80` by default (nginx proxy).
+
 This comprehensive test suite includes:
 - Rapid sequential requests (110 requests to test Flask limit)
-- Concurrent requests (50 requests, 10 threads)
+- Concurrent requests (50 requests, 10 threads) - **will hit nginx 5 req/s limit**
 - Sustained rate testing (2 req/s for 10s)
 
 **Expected Results:**
-- Flask limit (100 req/min): First 100 requests succeed, then 429 errors
-- Nginx limit (5 req/s): Requests exceeding 5/s will get 429 errors
+- **Nginx limit (5 req/s):** Requests exceeding 5/s will get 429 errors from nginx
+- **Flask limit (100 req/min):** Requests within nginx limits but exceeding 100/min will get 429 errors from Flask
+- Nginx rate limiting is evaluated **first**, so high-rate requests (>5/s) will be blocked before reaching Flask
 
 ### Gatling Stress Tests
 
@@ -287,17 +329,26 @@ See `gatling/README.md` for detailed documentation.
 
 ### Advanced Testing Tools
 
+All load testing must go through nginx:
+
 #### Apache Bench
 
 ```bash
-ab -n 120 -c 10 http://localhost:5001/health
+# Test through nginx (will hit 5 req/s limit)
+ab -n 120 -c 10 http://localhost:80/health
+
+# Or test specific endpoint
+ab -n 120 -c 10 http://localhost:80/counting-warriors
 ```
 
 #### wrk
 
 ```bash
-wrk -t2 -c10 -d30s http://localhost:5001/health
+# Test through nginx
+wrk -t2 -c10 -d30s http://localhost:80/health
 ```
+
+**Note:** These tools send high-concurrency requests that will trigger nginx rate limiting (5 req/s). Adjust test parameters accordingly.
 
 ## Rate Limiting Configuration
 
@@ -354,33 +405,46 @@ api_stress_test/
 └── test_connection.py     # Database connection test
 ```
 
-## GHCR Nginx Component
+## GHCR Nginx Component (Required)
 
-The nginx configuration is designed to run in a container from GitHub Container Registry (GHCR). 
+The nginx container from GitHub Container Registry (GHCR) is **required** for all deployments and testing. It provides the first layer of rate limiting and security features.
+
+### Why Nginx is Required
+
+- **Dual-layer rate limiting:** Nginx (5 req/s) + Flask (100 req/min)
+- **Production-ready security:** SSL/TLS, security headers, connection limits
+- **Reverse proxy:** Protects Flask app and provides proper HTTP handling
+- **Rate limit testing:** Both limiters must be tested together
 
 ### Container Setup
 
-1. **Build/pull nginx container** with the configuration
-2. **Deploy using the script:**
+1. **Pull nginx container from GHCR:**
    ```bash
-   ./scripts/deploy_nginx_config.sh [container_name]
+   docker pull ghcr.io/your-org/api-stress-test-nginx:latest
+   ```
+
+2. **Deploy configuration:**
+   ```bash
+   ./scripts/deploy_nginx_config.sh api_stress_test_nginx
    ```
 
 The nginx container provides:
-- SSL/TLS termination
-- Rate limiting (5 req/s with burst of 10)
-- Connection limits
-- Security headers
-- Reverse proxy to Flask app on port 5001
-
-### Nginx Configuration Features
-
-- **Rate Limiting:** `limit_req_zone` with 5 req/s and burst of 10
-- **Connection Limits:** Maximum 20 concurrent connections per IP
-- **Security Headers:** HSTS, X-Frame-Options, X-Content-Type-Options, X-XSS-Protection
+- **Rate limiting:** 5 req/s with burst of 10 (first defense)
+- **Connection limits:** Maximum 20 concurrent connections per IP
+- **SSL/TLS termination:** HTTPS support with security headers
+- **Security headers:** HSTS, X-Frame-Options, X-Content-Type-Options, X-XSS-Protection
+- **Reverse proxy:** Forwards requests to Flask app on port 5001
 - **Timeouts:** Protection against slowloris attacks
-- **Body Size Limit:** 2MB maximum request body size
-- **HTTP/2 Support:** Enabled for better performance
+- **Body size limit:** 2MB maximum request body size
+- **HTTP/2 support:** Enabled for better performance
+
+### Nginx Configuration Details
+
+The `nginx.conf` file configures:
+- **Rate Limiting:** `limit_req_zone` with 5 req/s and burst of 10
+- **Connection Limits:** Maximum 20 concurrent connections per IP via `limit_conn_zone`
+- **Security Headers:** All security headers applied to responses
+- **Proxy Settings:** Proper headers forwarded to Flask (X-Real-IP, X-Forwarded-For)
 
 ## Troubleshooting
 
@@ -399,19 +463,28 @@ lsof -i :5001
 - Check `.env` file if using MotherDuck
 - Verify MOTHERDUCK_TOKEN is set correctly
 
-### Nginx Issues
+### Nginx Container Issues
 
 **Container not starting:**
 ```bash
 # Check container logs
 docker logs api_stress_test_nginx
 
+# Check if container is running
+docker ps -a | grep api_stress_test_nginx
+
 # Verify nginx config syntax
 docker exec api_stress_test_nginx nginx -t
 ```
 
-**SSL certificate errors:**
-- For local testing, modify `nginx.conf` to remove SSL requirements
+**Container can't connect to Flask:**
+- Ensure Flask app is running on `localhost:5001`
+- Use `--network host` flag when running container, or configure Docker network
+- Check nginx config has correct `proxy_pass http://127.0.0.1:5001`
+
+**SSL certificate errors (for HTTPS):**
+- For local testing, use HTTP on port 80 instead
+- Or modify `nginx.conf` to remove SSL requirements
 - Or generate self-signed certificates:
   ```bash
   openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
@@ -420,9 +493,19 @@ docker exec api_stress_test_nginx nginx -t
 
 ### Rate Limiting Not Working
 
-- **Flask:** Check that `flask-limiter` is properly installed
-- **Nginx:** Verify `nginx.conf` is deployed correctly to container
-- **Testing:** Use 100+ requests for Flask limit, 10+ req/s for nginx limit
+**Nginx rate limiting:**
+- Verify `nginx.conf` is deployed correctly: `docker exec api_stress_test_nginx nginx -t`
+- Test with >5 req/s to trigger nginx limit (e.g., `ab -n 10 -c 10 http://localhost:80/health`)
+- Check nginx logs: `docker logs api_stress_test_nginx`
+
+**Flask rate limiting:**
+- Check that `flask-limiter` is properly installed
+- Verify Flask app is receiving requests (check Flask logs)
+- Test with >100 requests/min within nginx limits
+
+**Both limiters:**
+- Always test through nginx (`http://localhost:80`), not directly to Flask
+- Nginx limits are checked first, then Flask limits
 
 ## Development
 

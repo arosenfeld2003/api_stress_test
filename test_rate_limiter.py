@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Comprehensive rate limiter test script
-Tests the Flask rate limiter with various scenarios
+Tests the Flask rate limiter with various warrior API endpoints
 """
 
 import requests
@@ -10,35 +10,103 @@ import statistics
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from collections import defaultdict
 import sys
+import random
+import uuid
 
-ENDPOINT = "http://localhost:5001/health"
-DEFAULT_LIMIT = 100  # requests per minute
+BASE_URL = "http://localhost:80"  # Use nginx proxy, not direct Flask
+DEFAULT_LIMIT = 100  # requests per minute (Flask limit)
+NGINX_LIMIT = 5  # requests per second (Nginx limit)
+
+# Warrior endpoints to test
+ENDPOINTS = {
+    'count': f"{BASE_URL}/counting-warriors",
+    'search': f"{BASE_URL}/warrior",
+    'create': f"{BASE_URL}/warrior",
+}
+
+# Sample warrior data for testing
+SAMPLE_WARRIORS = [
+    {"name": "Master Yoda", "dob": "1970-01-01", "fight_skills": ["BJJ", "KungFu", "Judo"]},
+    {"name": "Obi-Wan Kenobi", "dob": "1950-05-10", "fight_skills": ["Lightsaber", "Force", "Meditation"]},
+    {"name": "Luke Skywalker", "dob": "1980-12-20", "fight_skills": ["X-Wing", "Force", "Leadership"]},
+    {"name": "Princess Leia", "dob": "1980-12-20", "fight_skills": ["Diplomacy", "Blaster", "Leadership"]},
+    {"name": "Darth Vader", "dob": "1945-03-15", "fight_skills": ["Lightsaber", "Force", "Intimidation"]},
+]
 
 
-def test_single_request():
-    """Test a single request"""
+def test_count_warriors():
+    """Test GET /counting-warriors endpoint"""
     try:
-        response = requests.get(ENDPOINT, timeout=5)
+        response = requests.get(ENDPOINTS['count'], timeout=5)
         return response.status_code, response.elapsed.total_seconds()
     except Exception as e:
         return None, 0
 
 
-def test_rapid_requests(num_requests=110):
+def test_search_warriors(term=None):
+    """Test GET /warrior?t={term} endpoint"""
+    try:
+        if term is None:
+            term = random.choice(["Yoda", "Luke", "Force", "Leadership", "Judo"])
+        response = requests.get(ENDPOINTS['search'], params={'t': term}, timeout=5)
+        return response.status_code, response.elapsed.total_seconds()
+    except Exception as e:
+        return None, 0
+
+
+def test_create_warrior(warrior_data=None):
+    """Test POST /warrior endpoint"""
+    try:
+        if warrior_data is None:
+            warrior_data = random.choice(SAMPLE_WARRIORS).copy()
+            warrior_data['name'] = f"{warrior_data['name']} {uuid.uuid4().hex[:8]}"
+        response = requests.post(
+            ENDPOINTS['create'],
+            json=warrior_data,
+            headers={'Content-Type': 'application/json'},
+            timeout=5
+        )
+        return response.status_code, response.elapsed.total_seconds()
+    except Exception as e:
+        return None, 0
+
+
+def test_single_request(endpoint_type=None):
+    """Test a single request to a warrior endpoint"""
+    if endpoint_type is None:
+        endpoint_type = random.choice(['count', 'search', 'create'])
+    
+    if endpoint_type == 'count':
+        return test_count_warriors()
+    elif endpoint_type == 'search':
+        return test_search_warriors()
+    elif endpoint_type == 'create':
+        return test_create_warrior()
+    else:
+        return None, 0
+
+
+def test_rapid_requests(num_requests=110, endpoint_mix=True):
     """Test rapid sequential requests to see when rate limiting kicks in"""
     print(f"\n{'='*60}")
     print(f"Test 1: Rapid Sequential Requests ({num_requests} requests)")
+    if endpoint_mix:
+        print("  Testing mix of: GET /counting-warriors, GET /warrior?t=..., POST /warrior")
     print(f"{'='*60}\n")
     
     results = []
     start_time = time.time()
     
+    # Use count endpoint for consistent testing (it's read-only and fast)
+    endpoint_type = 'count' if not endpoint_mix else None
+    
     for i in range(1, num_requests + 1):
-        status_code, elapsed = test_single_request()
+        status_code, elapsed = test_single_request(endpoint_type)
         timestamp = time.time() - start_time
         
         if status_code:
-            symbol = "✓" if status_code == 200 else "🚫" if status_code == 429 else "✗"
+            # Accept both 200 (success) and 201 (created) as success
+            symbol = "✓" if status_code in [200, 201] else "🚫" if status_code == 429 else "✗"
             print(f"[{timestamp:6.3f}s] Request {i:3d}: {symbol} {status_code}")
             results.append((i, status_code, elapsed, timestamp))
         else:
@@ -52,17 +120,24 @@ def test_rapid_requests(num_requests=110):
     analyze_results(results, total_time, num_requests)
 
 
-def test_concurrent_requests(num_requests=50, num_threads=10):
+def test_concurrent_requests(num_requests=50, num_threads=10, endpoint_mix=False):
     """Test concurrent requests from multiple threads"""
     print(f"\n{'='*60}")
     print(f"Test 2: Concurrent Requests ({num_requests} requests, {num_threads} threads)")
+    if endpoint_mix:
+        print("  Testing mix of warrior endpoints")
+    else:
+        print("  Testing GET /counting-warriors endpoint")
     print(f"{'='*60}\n")
     
     results = []
     start_time = time.time()
     
+    # Use count endpoint for concurrent testing (read-only, no conflicts)
+    endpoint_type = 'count' if not endpoint_mix else None
+    
     with ThreadPoolExecutor(max_workers=num_threads) as executor:
-        futures = {executor.submit(test_single_request): i for i in range(1, num_requests + 1)}
+        futures = {executor.submit(test_single_request, endpoint_type): i for i in range(1, num_requests + 1)}
         
         for future in as_completed(futures):
             request_num = futures[future]
@@ -71,7 +146,8 @@ def test_concurrent_requests(num_requests=50, num_threads=10):
                 timestamp = time.time() - start_time
                 
                 if status_code:
-                    symbol = "✓" if status_code == 200 else "🚫" if status_code == 429 else "✗"
+                    # Accept both 200 (success) and 201 (created) as success
+                    symbol = "✓" if status_code in [200, 201] else "🚫" if status_code == 429 else "✗"
                     print(f"[{timestamp:6.3f}s] Request {request_num:3d}: {symbol} {status_code} ({elapsed*1000:.1f}ms)")
                     results.append((request_num, status_code, elapsed, timestamp))
                 else:
@@ -84,10 +160,14 @@ def test_concurrent_requests(num_requests=50, num_threads=10):
     analyze_results(results, total_time, num_requests)
 
 
-def test_sustained_rate(target_rps=2, duration=30):
+def test_sustained_rate(target_rps=2, duration=30, endpoint_mix=True):
     """Test sustained request rate over time"""
     print(f"\n{'='*60}")
     print(f"Test 3: Sustained Rate ({target_rps} req/s for {duration}s)")
+    if endpoint_mix:
+        print("  Testing mix of warrior endpoints")
+    else:
+        print("  Testing GET /counting-warriors endpoint")
     print(f"{'='*60}\n")
     
     results = []
@@ -95,13 +175,16 @@ def test_sustained_rate(target_rps=2, duration=30):
     interval = 1.0 / target_rps
     request_num = 0
     
+    endpoint_type = None if endpoint_mix else 'count'
+    
     while time.time() - start_time < duration:
         request_num += 1
-        status_code, elapsed = test_single_request()
+        status_code, elapsed = test_single_request(endpoint_type)
         timestamp = time.time() - start_time
         
         if status_code:
-            symbol = "✓" if status_code == 200 else "🚫" if status_code == 429 else "✗"
+            # Accept both 200 (success) and 201 (created) as success
+            symbol = "✓" if status_code in [200, 201] else "🚫" if status_code == 429 else "✗"
             print(f"[{timestamp:6.1f}s] Request {request_num:3d}: {symbol} {status_code}")
             results.append((request_num, status_code, elapsed, timestamp))
         
@@ -127,11 +210,13 @@ def analyze_results(results, total_time, total_requests):
                 response_times.append(elapsed * 1000)  # Convert to ms
     
     print(f"Total requests:     {total_requests}")
-    print(f"Successful (200):   {status_counts.get(200, 0)}")
+    successful = status_counts.get(200, 0) + status_counts.get(201, 0)
+    print(f"Successful (200/201): {successful}")
     print(f"Rate limited (429): {status_counts.get(429, 0)}")
-    print(f"Other errors:       {sum(v for k, v in status_counts.items() if k not in [200, 429])}")
+    print(f"Other errors:       {sum(v for k, v in status_counts.items() if k not in [200, 201, 429])}")
     print(f"Total time:         {total_time:.2f}s")
-    print(f"Average rate:       {total_requests/total_time:.2f} req/s")
+    if total_time > 0:
+        print(f"Average rate:       {total_requests/total_time:.2f} req/s")
     
     if response_times:
         print(f"\nResponse Times:")
@@ -144,49 +229,70 @@ def analyze_results(results, total_time, total_requests):
     
     if status_counts.get(429, 0) > 0:
         print(f"\n⚠️  Rate limiting detected! {status_counts[429]} requests were throttled.")
-    elif status_counts.get(200, 0) == total_requests:
+    elif successful == total_requests:
         print(f"\n✓ All requests succeeded (within rate limit)")
     
     print()
 
 
 def check_endpoint():
-    """Check if the endpoint is reachable"""
+    """Check if the API endpoints are reachable"""
     try:
-        response = requests.get(ENDPOINT, timeout=5)
+        # Check health endpoint first (it's exempt from rate limiting)
+        health_response = requests.get(f"{BASE_URL}/health", timeout=5)
+        if health_response.status_code != 200:
+            print(f"❌ Health check failed with status {health_response.status_code}")
+            return False
+        
+        # Check a warrior endpoint
+        count_response = requests.get(ENDPOINTS['count'], timeout=5)
+        if count_response.status_code not in [200, 429]:  # 429 is OK if rate limited
+            print(f"❌ Warrior endpoint test failed with status {count_response.status_code}")
+            return False
+        
         return True
-    except Exception as e:
-        print(f"❌ Cannot reach endpoint: {ENDPOINT}")
+    except requests.exceptions.ConnectionError as e:
+        print(f"❌ Cannot connect to API at {BASE_URL}")
         print(f"   Error: {e}")
-        print(f"\n   Make sure the Flask app is running:")
-        print(f"   python limiter.py")
+        print(f"\n   Make sure:")
+        print(f"   1. Nginx container is running: docker ps | grep api_stress_test_nginx")
+        print(f"   2. Nginx config is deployed: ./scripts/deploy_nginx_config.sh")
+        print(f"   3. Flask app is running: python limiter.py")
+        return False
+    except Exception as e:
+        print(f"❌ Error checking endpoints: {e}")
         return False
 
 
 def main():
     print("="*60)
-    print("Rate Limiter Test Suite")
+    print("Warrior API Rate Limiter Test Suite")
     print("="*60)
     
     if not check_endpoint():
         sys.exit(1)
     
-    print(f"✓ Endpoint is reachable: {ENDPOINT}")
-    print(f"  Flask limit: {DEFAULT_LIMIT} requests per minute")
+    print(f"✓ API is reachable at {BASE_URL} (via nginx proxy)")
+    print(f"  Nginx limit: {NGINX_LIMIT} requests per second (first defense)")
+    print(f"  Flask limit: {DEFAULT_LIMIT} requests per minute (second defense)")
+    print(f"  Testing endpoints:")
+    print(f"    - GET /counting-warriors")
+    print(f"    - GET /warrior?t={{term}}")
+    print(f"    - POST /warrior")
     
     try:
         # Test 1: Rapid sequential requests
-        test_rapid_requests(110)  # Should hit limit around 100
+        test_rapid_requests(110, endpoint_mix=False)  # Use count endpoint for consistency
         
         time.sleep(2)  # Brief pause between tests
         
         # Test 2: Concurrent requests
-        test_concurrent_requests(50, 10)
+        test_concurrent_requests(50, 10, endpoint_mix=False)  # Use count endpoint
         
         time.sleep(2)
         
         # Test 3: Sustained rate
-        test_sustained_rate(target_rps=2, duration=10)  # Should be well within limit
+        test_sustained_rate(target_rps=2, duration=10, endpoint_mix=True)  # Mix endpoints
         
         print("="*60)
         print("All tests completed!")
