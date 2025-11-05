@@ -103,10 +103,17 @@ This script will:
 
 2. **Start Flask app on port 9999:**
    ```bash
+   # Option A: Use helper script (recommended)
+   ./scripts/start_flask_for_stress_test.sh
+   
+   # Option B: Start manually
    PORT=9999 FLASK_THREADED=true python3 limiter.py
+   
+   # Verify it's running:
+   curl http://localhost:9999/health
    ```
 
-3. **Run Gatling tests:**
+3. **Run Gatling tests (in another terminal):**
    ```bash
    cd api_under_stress
    ./stress-test/run-test.sh
@@ -246,6 +253,37 @@ pip install -r requirements.txt
 pip3 install --user -r requirements.txt
 ```
 
+### Connection Refused Errors
+
+If you see `j.n.ConnectException: Connection refused` in Gatling, the Flask app isn't reachable:
+
+```bash
+# 1. Check if Flask is running
+curl http://localhost:9999/health
+
+# 2. If not responding, check if process is running
+ps aux | grep limiter.py
+
+# 3. Check if port 9999 is in use
+lsof -i :9999
+
+# 4. Start Flask app manually
+./scripts/start_flask_for_stress_test.sh
+
+# Or start manually:
+PORT=9999 FLASK_THREADED=true python3 limiter.py
+
+# 5. Verify it's working
+curl http://localhost:9999/health
+# Should return: {"status":"ok"}
+```
+
+**Common causes:**
+- Flask app not started
+- Flask app crashed (check logs)
+- Port 9999 blocked by firewall
+- Flask app started but not ready yet (wait a few seconds)
+
 ### Flask App Not Starting
 
 ```bash
@@ -258,9 +296,17 @@ pkill -f "limiter.py"
 # Verify dependencies before starting
 python3 -c "import flask; import flask_limiter; import duckdb"
 
-# Start Flask app
-PORT=9999 FLASK_THREADED=true python3 limiter.py
+# Start Flask app with logging
+PORT=9999 FLASK_THREADED=true python3 limiter.py > /tmp/flask.log 2>&1 &
+
+# Check logs if it fails
+tail -50 /tmp/flask.log
 ```
+
+**If Flask crashes on startup:**
+- Check database permissions: `ls -la data/app.duckdb`
+- Verify database schema: `python3 -c "from src.db.connection import get_connection; with get_connection(read_only=False, apply_schema=True) as con: pass"`
+- Check for import errors: `python3 -c "from limiter import app; print('OK')"`
 
 ### Java Not Found / Gatling Won't Start
 

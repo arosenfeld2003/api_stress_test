@@ -74,21 +74,54 @@ else
         exit 1
     fi
     
-    PORT=9999 FLASK_THREADED=true python3 limiter.py &
+    # Start Flask app in background
+    PORT=9999 FLASK_THREADED=true python3 limiter.py > /tmp/flask_stress_test.log 2>&1 &
     FLASK_PID=$!
     echo "Flask app started with PID $FLASK_PID"
+    echo "Logs available at: /tmp/flask_stress_test.log"
     
-    # Wait for Flask to be ready
+    # Wait for Flask to be ready with better error handling
     echo "Waiting for Flask app to be ready..."
-    for i in {1..30}; do
+    MAX_WAIT=30
+    for i in $(seq 1 $MAX_WAIT); do
         if curl -s http://localhost:9999/health > /dev/null 2>&1; then
-            echo "✓ Flask app is ready"
-            break
+            echo "✓ Flask app is ready and responding"
+            # Double-check with a full response
+            HEALTH_CHECK=$(curl -s http://localhost:9999/health)
+            if echo "$HEALTH_CHECK" | grep -q "ok"; then
+                echo "✓ Health check passed: $HEALTH_CHECK"
+                break
+            fi
         fi
-        if [ $i -eq 30 ]; then
-            echo "Error: Flask app did not start within 30 seconds"
+        
+        # Check if process is still running
+        if ! kill -0 $FLASK_PID 2>/dev/null; then
+            echo "Error: Flask app process died unexpectedly"
+            echo "Last 20 lines of Flask log:"
+            tail -20 /tmp/flask_stress_test.log
+            exit 1
+        fi
+        
+        if [ $i -eq $MAX_WAIT ]; then
+            echo "Error: Flask app did not become ready within ${MAX_WAIT} seconds"
+            echo "Checking if port 9999 is in use..."
+            lsof -i :9999 || echo "Port 9999 is not in use"
+            echo ""
+            echo "Last 20 lines of Flask log:"
+            tail -20 /tmp/flask_stress_test.log
+            echo ""
+            echo "Flask app process (PID $FLASK_PID) is still running but not responding"
+            echo "You may need to:"
+            echo "  1. Check for errors in /tmp/flask_stress_test.log"
+            echo "  2. Manually start Flask: PORT=9999 FLASK_THREADED=true python3 limiter.py"
+            echo "  3. Verify the app works: curl http://localhost:9999/health"
             kill $FLASK_PID 2>/dev/null || true
             exit 1
+        fi
+        
+        # Show progress every 5 seconds
+        if [ $((i % 5)) -eq 0 ]; then
+            echo "  Still waiting... (${i}/${MAX_WAIT}s)"
         fi
         sleep 1
     done
