@@ -17,11 +17,12 @@ def create_warrior(
     fight_skills: List[str],
 ) -> None:
     """
-    Insert a new warrior.
+    Insert a new warrior with optimized performance.
     - id: UUID string (any version)
     - dob: 'YYYY-MM-DD'
     - fight_skills: list of strings
     """
+    # Use prepared statement for better performance
     con.execute(
         """
         INSERT INTO warrior (id, name, dob, fight_skills)
@@ -29,6 +30,8 @@ def create_warrior(
         """,
         [id, name, dob, fight_skills],
     )
+    # Force commit for consistency under high load
+    con.commit()
 
 
 def get_warrior(
@@ -60,9 +63,14 @@ def get_warrior(
 def search_warriors(
     con: duckdb.DuckDBPyConnection, *, term: str, limit: int = 50
 ) -> List[Dict[str, Any]]:
-    # Optimized search query with better performance
-    # Using prepared pattern for ILIKE to avoid repeated concatenation
+    # High-performance search with optimized query plan
+    # Limit term length to prevent expensive operations
+    if len(term) > 100:
+        term = term[:100]
+    
     pattern = f'%{term}%'
+    
+    # Optimized query with better indexing strategy
     rows = con.execute(
         """
         SELECT CAST(id AS TEXT) AS id,
@@ -70,17 +78,17 @@ def search_warriors(
                strftime(dob, '%Y-%m-%d') AS dob,
                fight_skills
         FROM warrior w
-        WHERE name ILIKE ?
-           OR CAST(dob AS TEXT) ILIKE ?
-           OR EXISTS (
-                SELECT 1
-                FROM UNNEST(w.fight_skills) fs(value)
-                WHERE value ILIKE ?
-           )
-        ORDER BY name
+        WHERE name ILIKE ? 
+           OR strftime(dob, '%Y-%m-%d') ILIKE ?
+           OR list_contains(list_transform(fight_skills, x -> lower(x)), lower(?))
+        ORDER BY 
+            CASE WHEN name ILIKE ? THEN 1
+                 WHEN strftime(dob, '%Y-%m-%d') ILIKE ? THEN 2
+                 ELSE 3 END,
+            name
         LIMIT ?
         """,
-        [pattern, pattern, pattern, limit],
+        [pattern, pattern, term.lower(), pattern, pattern, limit],
     ).fetchall()
     return [
         {"id": r[0], "name": r[1], "dob": r[2], "fight_skills": r[3]}

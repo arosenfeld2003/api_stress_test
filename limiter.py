@@ -40,14 +40,14 @@ def on_breach(request_limit):
     response.status_code = 429
     return response
 
-# Get rate limit from environment variable, default to 60000 req/min (1000 req/s)
-flask_rate_limit = os.getenv('FLASK_RATE_LIMIT', '60000')
+# Get rate limit from environment variable, default to 120000 req/min (2000 req/s)
+flask_rate_limit = os.getenv('FLASK_RATE_LIMIT', '120000')  # Increased for stress testing
 limiter = Limiter(
     key_func=get_remote_address,
     default_limits=[f"{flask_rate_limit} per minute"],
     storage_uri="memory://",
     default_limits_per_method=True,
-    headers_enabled=True,
+    headers_enabled=False,  # Disable headers for better performance
     swallow_errors=True,  # Don't raise exceptions on storage errors
     on_breach=on_breach,  # Custom handler for rate limit breaches
     fail_on_first_breach=False  # Continue processing even after breach
@@ -200,5 +200,11 @@ if __name__ == '__main__':
     # For production, use a proper WSGI server like gunicorn
     threaded = os.getenv('FLASK_THREADED', 'false').lower() == 'true'
     
+    # High-performance settings for stress testing
+    if threaded:
+        # Enable performance optimizations for high-load testing
+        app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+        app.config['JSONIFY_PRETTYPRINT_REGULAR'] = False
+    
     app.logger.info(f"Starting Flask app on {host}:{port} (threaded={threaded})")
-    app.run(host=host, port=port, threaded=threaded)
+    app.run(host=host, port=port, threaded=threaded, processes=1)

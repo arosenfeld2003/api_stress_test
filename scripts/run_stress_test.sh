@@ -165,7 +165,7 @@ else
     fi
     
     # Start Flask app in background with high rate limit for stress testing
-    PORT=5001 FLASK_THREADED=true FLASK_RATE_LIMIT=60000 python3 limiter.py > /tmp/flask_stress_test.log 2>&1 &
+    PORT=5001 FLASK_THREADED=true FLASK_RATE_LIMIT=120000 USE_DB_POOL=true DB_POOL_SIZE=10 DB_MAX_CONNECTIONS=20 python3 limiter.py > /tmp/flask_stress_test.log 2>&1 &
     FLASK_PID=$!
     echo "Flask app started with PID $FLASK_PID"
     echo "Logs available at: /tmp/flask_stress_test.log"

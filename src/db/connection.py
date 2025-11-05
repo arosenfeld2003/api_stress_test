@@ -74,17 +74,26 @@ def get_connection(read_only: bool = False, apply_schema: bool = False) -> Itera
         if mode == "local":
             db_path = os.getenv("LOCAL_DUCKDB_PATH", DEFAULT_LOCAL_PATH)
             _ensure_parent_dir(db_path)
-            # DuckDB connection - no special config needed for concurrency
-            # DuckDB handles concurrent connections well by default
+            # DuckDB connection optimized for high-concurrency stress testing
             con = duckdb.connect(db_path, read_only=read_only)
-            # Optimize for high concurrency workloads
+            
+            # High-performance settings for stress testing
+            import multiprocessing
+            thread_count = min(multiprocessing.cpu_count(), 8)  # Allow more threads
+            con.execute(f"PRAGMA threads={thread_count}")
+            con.execute("PRAGMA enable_progress_bar=false")  # Disable progress bar
+            con.execute("PRAGMA memory_limit='2GB'")  # Increase memory limit
+            con.execute("PRAGMA temp_directory='/tmp/duckdb_temp'")
+            
             if not read_only:
-                # Set thread count for parallel query execution
-                # Adjust based on CPU cores available
-                import multiprocessing
-                thread_count = min(multiprocessing.cpu_count(), 4)
-                con.execute(f"PRAGMA threads={thread_count}")
-                con.execute("PRAGMA enable_progress_bar=false")  # Disable progress bar for performance
+                # Performance optimizations for write operations
+                con.execute("PRAGMA checkpoint_threshold='64MB'")
+                con.execute("PRAGMA wal_autocheckpoint=10000")  # Less frequent checkpoints
+                con.execute("PRAGMA synchronous=NORMAL")  # Balance between safety and speed
+                con.execute("PRAGMA journal_mode=WAL")  # Write-ahead logging for better concurrency
+            else:
+                # Read-only optimizations
+                con.execute("PRAGMA access_mode=read_only")
         else:
             # Try MotherDuck connection, fall back to local if it fails
             token = os.getenv("MOTHERDUCK_TOKEN", "").strip()
