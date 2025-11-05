@@ -87,9 +87,11 @@ python3 -c "import flask; import flask_limiter; import duckdb; print('OK')"
 
 This script will:
 1. Generate test resources (100,000 warrior payloads, 5,000 search terms)
-2. Start the Flask app on port 9999
-3. Run the Gatling stress tests
-4. Display results location
+2. Start/check nginx container (port 80)
+3. Start the Flask app on port 5001 (nginx backend)
+4. Deploy nginx configuration
+5. Run the Gatling stress tests through nginx
+6. Display results location
 
 ### Option 2: Manual Steps
 
@@ -101,23 +103,41 @@ This script will:
    python3 stress-test/generate_resources.py
    ```
 
-2. **Start Flask app on port 9999:**
+2. **Start nginx container:**
    ```bash
-   # Option A: Use helper script (recommended)
-   ./scripts/start_flask_for_stress_test.sh
+   # Build nginx image (if needed)
+   ./scripts/build_nginx_image.sh
    
-   # Option B: Start manually
-   PORT=9999 FLASK_THREADED=true python3 limiter.py
+   # Start nginx container
+   docker run -d \
+     --name api_stress_test_nginx \
+     -p 80:80 \
+     ghcr.io/arosenfeld2003/api-stress-test-nginx:latest
    
-   # Verify it's running:
-   curl http://localhost:9999/health
+   # Deploy nginx config
+   ./scripts/deploy_nginx_config.sh api_stress_test_nginx
    ```
 
-3. **Run Gatling tests (in another terminal):**
+3. **Start Flask app on port 5001 (nginx backend):**
+   ```bash
+   PORT=5001 FLASK_THREADED=true python3 limiter.py
+   
+   # Verify it's running:
+   curl http://localhost:5001/health
+   ```
+
+4. **Verify nginx can reach Flask:**
+   ```bash
+   curl http://localhost:80/health
+   ```
+
+5. **Run Gatling tests (in another terminal):**
    ```bash
    cd api_under_stress
    ./stress-test/run-test.sh
    ```
+   
+   **Note:** Gatling tests now target `http://localhost:80` (nginx) instead of direct Flask.
 
 ## Test Scenarios
 
@@ -255,40 +275,45 @@ pip3 install --user -r requirements.txt
 
 ### Connection Refused Errors
 
-If you see `j.n.ConnectException: Connection refused` in Gatling, the Flask app isn't reachable:
+If you see `j.n.ConnectException: Connection refused` in Gatling, nginx or Flask isn't reachable:
 
 ```bash
-# 1. Check if Flask is running
-curl http://localhost:9999/health
+# 1. Check if nginx is accessible
+curl http://localhost:80/health
 
-# 2. If not responding, check if process is running
+# 2. Check if Flask is running (nginx backend)
+curl http://localhost:5001/health
+
+# 3. If nginx not responding, check container
+docker ps | grep api_stress_test_nginx
+
+# 4. If Flask not responding, check if process is running
 ps aux | grep limiter.py
 
-# 3. Check if port 9999 is in use
-lsof -i :9999
+# 5. Check if port 5001 is in use
+lsof -i :5001
 
-# 4. Start Flask app manually
-./scripts/start_flask_for_stress_test.sh
+# 6. Start Flask app manually (nginx backend)
+PORT=5001 FLASK_THREADED=true python3 limiter.py
 
-# Or start manually:
-PORT=9999 FLASK_THREADED=true python3 limiter.py
-
-# 5. Verify it's working
-curl http://localhost:9999/health
+# 7. Verify nginx can reach Flask
+curl http://localhost:80/health
 # Should return: {"status":"ok"}
 ```
 
 **Common causes:**
-- Flask app not started
+- Nginx container not running
+- Flask app not started on port 5001
 - Flask app crashed (check logs)
-- Port 9999 blocked by firewall
+- Nginx cannot reach Flask (check Docker networking)
+- Port 5001 blocked by firewall
 - Flask app started but not ready yet (wait a few seconds)
 
 ### Flask App Not Starting
 
 ```bash
-# Check if port 9999 is already in use
-lsof -i :9999
+# Check if port 5001 is already in use
+lsof -i :5001
 
 # Kill existing process
 pkill -f "limiter.py"
@@ -296,8 +321,8 @@ pkill -f "limiter.py"
 # Verify dependencies before starting
 python3 -c "import flask; import flask_limiter; import duckdb"
 
-# Start Flask app with logging
-PORT=9999 FLASK_THREADED=true python3 limiter.py > /tmp/flask.log 2>&1 &
+# Start Flask app with logging (nginx backend)
+PORT=5001 FLASK_THREADED=true python3 limiter.py > /tmp/flask.log 2>&1 &
 
 # Check logs if it fails
 tail -50 /tmp/flask.log
@@ -336,24 +361,34 @@ export PATH="$JAVA_HOME/bin:$PATH"
 
 ### Gatling Tests Failing
 
-1. **Check Flask app is running:**
+1. **Check nginx is accessible:**
    ```bash
-   curl http://localhost:9999/health
+   curl http://localhost:80/health
    ```
 
-2. **Check Java is available:**
+2. **Check Flask app is running (nginx backend):**
+   ```bash
+   curl http://localhost:5001/health
+   ```
+
+3. **Check Java is available:**
    ```bash
    java -version
    ```
 
-3. **Check test resources exist:**
+4. **Check test resources exist:**
    ```bash
    ls -lh api_under_stress/stress-test/user-files/resources/
    ```
 
-4. **Verify Gatling installation:**
+5. **Verify Gatling installation:**
    ```bash
    ls api_under_stress/deps/gatling-charts-highcharts-bundle-3.10.5/bin/
+   ```
+
+6. **Check nginx container logs:**
+   ```bash
+   docker logs api_stress_test_nginx
    ```
 
 ### Database Performance Issues

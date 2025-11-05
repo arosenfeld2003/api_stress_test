@@ -23,13 +23,13 @@ This project implements a production-ready API with:
          │ HTTPS (443)
          ▼
 ┌─────────────────┐
-│  Nginx Proxy    │  ← Rate limit: 5 req/s (burst 10)
+│  Nginx Proxy    │  ← Rate limit: 1000 req/s (burst 200)
 │  (GHCR Container│  ← SSL/TLS termination
 └────────┬────────┘  ← Security headers
          │ HTTP (5001)
          ▼
 ┌─────────────────┐
-│  Flask App      │  ← Rate limit: 100 req/min per IP
+│  Flask App      │  ← Rate limit: 60,000 req/min per IP (configurable)
 │  (limiter.py)   │  ← Warrior API routes
 └────────┬────────┘
          │
@@ -240,6 +240,9 @@ LOCAL_DUCKDB_PATH=./data/app.duckdb
 # MotherDuck (if using cloud DB)
 MOTHERDUCK_TOKEN=your_token_here
 MOTHERDUCK_DATABASE=api_stress_test
+
+# Flask rate limiting (default: 60000 = 1000 req/s)
+FLASK_RATE_LIMIT=60000
 ```
 
 ## Testing
@@ -271,7 +274,7 @@ curl http://localhost:80/counting-warriors
 
 ### Rate Limiter Tests
 
-All tests go through nginx to validate **both** nginx (5 req/s) and Flask (100 req/min) rate limiters.
+All tests go through nginx to validate **both** nginx (1000 req/s) and Flask (60,000 req/min = 1000 req/s) rate limiters.
 
 #### Option 1: Simple Bash Script
 
@@ -295,14 +298,14 @@ python test_rate_limiter.py
 **Note:** The test suite is configured to use `http://localhost:80` by default (nginx proxy).
 
 This comprehensive test suite includes:
-- Rapid sequential requests (110 requests to test Flask limit)
-- Concurrent requests (50 requests, 10 threads) - **will hit nginx 5 req/s limit**
+- Rapid sequential requests (to test Flask limit)
+- Concurrent requests (50 requests, 10 threads)
 - Sustained rate testing (2 req/s for 10s)
 
 **Expected Results:**
-- **Nginx limit (5 req/s):** Requests exceeding 5/s will get 429 errors from nginx
-- **Flask limit (100 req/min):** Requests within nginx limits but exceeding 100/min will get 429 errors from Flask
-- Nginx rate limiting is evaluated **first**, so high-rate requests (>5/s) will be blocked before reaching Flask
+- **Nginx limit (1000 req/s):** Requests exceeding 1000/s will get 429 errors from nginx
+- **Flask limit (60,000 req/min = 1000 req/s):** Requests within nginx limits but exceeding 60,000/min will get 429 errors from Flask
+- Nginx rate limiting is evaluated **first**, so high-rate requests (>1000/s) will be blocked before reaching Flask
 
 ### Gatling Stress Tests
 
@@ -334,8 +337,8 @@ All load testing must go through nginx:
 #### Apache Bench
 
 ```bash
-# Test through nginx (will hit 5 req/s limit)
-ab -n 120 -c 10 http://localhost:80/health
+# Test through nginx (will hit 1000 req/s limit at high concurrency)
+ab -n 1200 -c 100 http://localhost:80/health
 
 # Or test specific endpoint
 ab -n 120 -c 10 http://localhost:80/counting-warriors
@@ -348,20 +351,21 @@ ab -n 120 -c 10 http://localhost:80/counting-warriors
 wrk -t2 -c10 -d30s http://localhost:80/health
 ```
 
-**Note:** These tools send high-concurrency requests that will trigger nginx rate limiting (5 req/s). Adjust test parameters accordingly.
+**Note:** These tools send high-concurrency requests that will trigger nginx rate limiting (1000 req/s). Adjust test parameters accordingly.
 
 ## Rate Limiting Configuration
 
 ### Flask Application Level
-- **Limit:** 100 requests per minute per IP address
+- **Limit:** Configurable via `FLASK_RATE_LIMIT` environment variable (default: 60,000 requests per minute = 1000 req/s)
 - **Implementation:** `flask-limiter` with `get_remote_address`
 - **Storage:** In-memory (resets on restart)
 - **Status Code:** 429 Too Many Requests
+- **Configuration:** Set `FLASK_RATE_LIMIT` environment variable to override (e.g., `FLASK_RATE_LIMIT=60000`)
 
 ### Nginx Proxy Level
-- **Limit:** 5 requests per second (with burst of 10)
+- **Limit:** 1000 requests per second (with burst of 200)
 - **Implementation:** `limit_req_zone` and `limit_req` directives
-- **Connection Limit:** 20 concurrent connections per IP
+- **Connection Limit:** 200 concurrent connections per IP
 - **Status Code:** 429 Too Many Requests
 
 **Rate Limit Behavior:**
@@ -369,6 +373,59 @@ wrk -t2 -c10 -d30s http://localhost:80/health
 - Flask rate limiting is evaluated **second** (at application level)
 - Requests exceeding nginx limits will never reach Flask
 - Requests within nginx limits may still be limited by Flask
+
+## IP Blocking and Abuse Detection
+
+The API includes an intelligent IP blocking system that automatically detects and blocks IP addresses sending illegitimate requests. This complements rate limiting by identifying persistent abusers based on behavior patterns.
+
+### Features
+
+- **Automatic Abuse Detection**: Tracks request patterns per IP and identifies abusive behavior
+- **Multiple Detection Patterns**: 
+  - Excessive request rates (>60,000 req/min = 1000 req/s)
+  - High failure rates (>50% failures)
+  - Persistent rate-limit violations (>90% rate-limited)
+- **Temporary Blocking**: Blocks abusive IPs for 5 minutes (configurable)
+- **Whitelisting**: Supports whitelisting IPs (e.g., localhost for stress testing)
+- **Admin Endpoints**: Check IP status and metrics via `/admin/ip-status`
+
+### Configuration
+
+Configure via environment variables:
+
+```bash
+# Maximum requests per minute before blocking (default: 60000 = 1000 req/s)
+IP_BLOCKER_MAX_RPM=60000
+
+# Maximum failure rate (%) before blocking
+IP_BLOCKER_MAX_FAILURE_RATE=50.0
+
+# Maximum rate-limit rate (%) before blocking
+IP_BLOCKER_MAX_RATE_LIMIT_RATE=90.0
+
+# Block duration in seconds (default: 300 = 5 minutes)
+IP_BLOCKER_DURATION_SECONDS=300
+
+# Whitelist localhost for stress testing (default: true)
+IP_BLOCKER_WHITELIST_LOCALHOST=true
+```
+
+### How It Works
+
+1. **Request Tracking**: Tracks metrics per IP over a rolling 60-second window
+2. **Abuse Detection**: Analyzes patterns (rate, failures, rate-limits)
+3. **Automatic Blocking**: Blocks IPs that exceed thresholds
+4. **Response**: Blocked IPs receive 403 Forbidden with unblock time
+
+### For Stress Testing
+
+By default, localhost IPs are whitelisted, so stress tests won't trigger IP blocking. To disable:
+
+```bash
+IP_BLOCKER_WHITELIST_LOCALHOST=false
+```
+
+See [IP_BLOCKING.md](IP_BLOCKING.md) for detailed documentation.
 
 ## Project Structure
 
@@ -379,10 +436,13 @@ api_stress_test/
 ├── requirements.txt        # Python dependencies
 ├── README.md              # This file
 ├── TESTING.md             # Detailed testing guide
+├── IP_BLOCKING.md         # IP blocking documentation
 │
 ├── src/
 │   ├── routes/
 │   │   └── warrior_routes.py  # Warrior API endpoints (Blueprint)
+│   ├── security/
+│   │   └── ip_blocker.py     # IP blocking and abuse detection
 │   └── db/
 │       ├── connection.py     # DuckDB connection manager
 │       ├── warrior.py        # Warrior data access functions
@@ -411,7 +471,7 @@ The nginx container from GitHub Container Registry (GHCR) is **required** for al
 
 ### Why Nginx is Required
 
-- **Dual-layer rate limiting:** Nginx (5 req/s) + Flask (100 req/min)
+- **Dual-layer rate limiting:** Nginx (1000 req/s) + Flask (60,000 req/min = 1000 req/s)
 - **Production-ready security:** SSL/TLS, security headers, connection limits
 - **Reverse proxy:** Protects Flask app and provides proper HTTP handling
 - **Rate limit testing:** Both limiters must be tested together
@@ -429,8 +489,8 @@ The nginx container from GitHub Container Registry (GHCR) is **required** for al
    ```
 
 The nginx container provides:
-- **Rate limiting:** 5 req/s with burst of 10 (first defense)
-- **Connection limits:** Maximum 20 concurrent connections per IP
+- **Rate limiting:** 1000 req/s with burst of 200 (first defense)
+- **Connection limits:** Maximum 200 concurrent connections per IP
 - **SSL/TLS termination:** HTTPS support with security headers
 - **Security headers:** HSTS, X-Frame-Options, X-Content-Type-Options, X-XSS-Protection
 - **Reverse proxy:** Forwards requests to Flask app on port 5001
@@ -441,8 +501,8 @@ The nginx container provides:
 ### Nginx Configuration Details
 
 The `nginx.conf` file configures:
-- **Rate Limiting:** `limit_req_zone` with 5 req/s and burst of 10
-- **Connection Limits:** Maximum 20 concurrent connections per IP via `limit_conn_zone`
+- **Rate Limiting:** `limit_req_zone` with 1000 req/s and burst of 200
+- **Connection Limits:** Maximum 200 concurrent connections per IP via `limit_conn_zone`
 - **Security Headers:** All security headers applied to responses
 - **Proxy Settings:** Proper headers forwarded to Flask (X-Real-IP, X-Forwarded-For)
 
@@ -495,17 +555,19 @@ docker exec api_stress_test_nginx nginx -t
 
 **Nginx rate limiting:**
 - Verify `nginx.conf` is deployed correctly: `docker exec api_stress_test_nginx nginx -t`
-- Test with >5 req/s to trigger nginx limit (e.g., `ab -n 10 -c 10 http://localhost:80/health`)
+- Test with >1000 req/s to trigger nginx limit (e.g., `ab -n 1100 -c 100 http://localhost:80/health`)
 - Check nginx logs: `docker logs api_stress_test_nginx`
 
 **Flask rate limiting:**
 - Check that `flask-limiter` is properly installed
 - Verify Flask app is receiving requests (check Flask logs)
-- Test with >100 requests/min within nginx limits
+- Check `FLASK_RATE_LIMIT` environment variable (default: 60000 req/min = 1000 req/s)
+- Test with >60000 requests/min within nginx limits
 
 **Both limiters:**
 - Always test through nginx (`http://localhost:80`), not directly to Flask
 - Nginx limits are checked first, then Flask limits
+
 
 ## Development
 

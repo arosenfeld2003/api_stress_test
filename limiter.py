@@ -1,15 +1,34 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_limiter.errors import RateLimitExceeded
 import signal
 import sys
+import os
 from src.routes.warrior_routes import warrior_bp
 from src.db.connection import get_connection
+from src.security import IPBlocker
 
 app = Flask(__name__)
 
-# Rate limiting: max 100 requests per minute per IP
+# Initialize IP blocker with configurable settings
+ip_blocker = IPBlocker(
+    window_seconds=int(os.getenv('IP_BLOCKER_WINDOW_SECONDS', '60')),
+    max_requests_per_minute=int(os.getenv('IP_BLOCKER_MAX_RPM', '60000')),  # 1000 req/s
+    max_failure_rate=float(os.getenv('IP_BLOCKER_MAX_FAILURE_RATE', '50.0')),
+    max_rate_limit_rate=float(os.getenv('IP_BLOCKER_MAX_RATE_LIMIT_RATE', '90.0')),
+    block_duration_seconds=int(os.getenv('IP_BLOCKER_DURATION_SECONDS', '300')),
+    min_requests_for_abuse=int(os.getenv('IP_BLOCKER_MIN_REQUESTS', '20')),
+)
+
+# Whitelist localhost for stress testing (can be disabled)
+if os.getenv('IP_BLOCKER_WHITELIST_LOCALHOST', 'true').lower() == 'true':
+    ip_blocker.whitelist_ip('127.0.0.1')
+    ip_blocker.whitelist_ip('::1')
+    ip_blocker.whitelist_ip('localhost')
+    app.logger.info("Whitelisted localhost IPs for stress testing")
+
+# Rate limiting: configurable via FLASK_RATE_LIMIT env var (default: 60000 per minute = 1000 req/s)
 # Explicitly use memory storage to avoid warning (for development/single-process use)
 def on_breach(request_limit):
     """Custom handler when rate limit is breached - return 429 response."""
@@ -21,9 +40,11 @@ def on_breach(request_limit):
     response.status_code = 429
     return response
 
+# Get rate limit from environment variable, default to 60000 req/min (1000 req/s)
+flask_rate_limit = os.getenv('FLASK_RATE_LIMIT', '60000')
 limiter = Limiter(
     key_func=get_remote_address,
-    default_limits=["100 per minute"],
+    default_limits=[f"{flask_rate_limit} per minute"],
     storage_uri="memory://",
     default_limits_per_method=True,
     headers_enabled=True,
@@ -32,6 +53,37 @@ limiter = Limiter(
     fail_on_first_breach=False  # Continue processing even after breach
 )
 limiter.init_app(app)
+
+# IP blocking middleware - check before processing request
+@app.before_request
+def check_ip_block():
+    """Check if the requesting IP is blocked."""
+    ip = get_remote_address()
+    
+    if ip_blocker.is_blocked(ip):
+        block_info = ip_blocker.get_block_info(ip)
+        remaining = int(block_info['remaining_seconds']) if block_info else 0
+        return jsonify(
+            error="IP address blocked",
+            message=f"Your IP address has been temporarily blocked due to abusive behavior. Unblock in {remaining} seconds.",
+            unblock_in_seconds=remaining
+        ), 403
+
+# After request hook - record request for IP tracking
+@app.after_request
+def record_request_metrics(response):
+    """Record request metrics for IP blocking analysis."""
+    # Don't record health check requests
+    if request.path == '/health':
+        return response
+    
+    ip = get_remote_address()
+    status_code = response.status_code
+    
+    # Record the request (this may trigger blocking if abusive)
+    ip_blocker.record_request(ip, status_code)
+    
+    return response
 
 # Register warrior routes blueprint
 app.register_blueprint(warrior_bp)
@@ -53,6 +105,33 @@ def initialize_db():
 def health():
     """Health check endpoint - exempt from rate limiting for monitoring."""
     return jsonify(status='ok')
+
+@app.route('/admin/ip-status')
+@limiter.exempt
+def ip_status():
+    """Admin endpoint to check IP status and metrics (for debugging)."""
+    ip = request.args.get('ip') or get_remote_address()
+    
+    if ip_blocker.is_whitelisted(ip):
+        return jsonify({
+            'ip': ip,
+            'status': 'whitelisted',
+            'metrics': ip_blocker.get_metrics(ip)
+        })
+    
+    block_info = ip_blocker.get_block_info(ip)
+    if block_info:
+        return jsonify({
+            'ip': ip,
+            'status': 'blocked',
+            **block_info
+        })
+    
+    return jsonify({
+        'ip': ip,
+        'status': 'active',
+        'metrics': ip_blocker.get_metrics(ip)
+    })
 
 # Handle rate limit exceptions properly (before general exception handler)
 @app.errorhandler(RateLimitExceeded)
