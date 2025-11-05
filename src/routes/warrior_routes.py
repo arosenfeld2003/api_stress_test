@@ -1,5 +1,7 @@
 from flask import Blueprint, request, jsonify
 import uuid
+import time
+import logging
 from src.db.connection import get_connection
 from src.db.warrior import (
     create_warrior,
@@ -9,11 +11,13 @@ from src.db.warrior import (
 )
 
 warrior_bp = Blueprint('warrior', __name__)
+logger = logging.getLogger(__name__)
 
 
 @warrior_bp.route('/warrior', methods=['POST'])
 def create_warrior_endpoint():
     """Create a new warrior. Returns 201 with Location header."""
+    start_time = time.time()
     try:
         data = request.get_json()
         
@@ -25,14 +29,44 @@ def create_warrior_endpoint():
         dob = data.get('dob')
         fight_skills = data.get('fight_skills')
         
+        # Track validation errors for proper 422 response
+        validation_errors = []
+        
         if not name:
-            return jsonify(error="Field 'name' is required"), 400
+            validation_errors.append("Field 'name' is required")
+        elif not isinstance(name, str):
+            validation_errors.append("Field 'name' must be a string")
+        elif len(name) > 100:
+            validation_errors.append("Field 'name' must be 100 characters or less")
+        
         if not dob:
-            return jsonify(error="Field 'dob' is required"), 400
-        if not fight_skills:
-            return jsonify(error="Field 'fight_skills' is required"), 400
-        if not isinstance(fight_skills, list):
-            return jsonify(error="Field 'fight_skills' must be a list"), 400
+            validation_errors.append("Field 'dob' is required")
+        elif not isinstance(dob, str):
+            validation_errors.append("Field 'dob' must be a string")
+        else:
+            # Validate date format (YYYY-MM-DD)
+            try:
+                from datetime import datetime
+                datetime.strptime(dob, '%Y-%m-%d')
+            except ValueError:
+                validation_errors.append("Field 'dob' must be in YYYY-MM-DD format")
+        
+        if fight_skills is None:
+            validation_errors.append("Field 'fight_skills' is required")
+        elif not isinstance(fight_skills, list):
+            validation_errors.append("Field 'fight_skills' must be a list")
+        elif len(fight_skills) == 0:
+            validation_errors.append("Field 'fight_skills' must contain at least one skill")
+        else:
+            # Validate each skill is a string
+            for skill in fight_skills:
+                if not isinstance(skill, str):
+                    validation_errors.append("All items in 'fight_skills' must be strings")
+                    break
+        
+        # Return 422 for validation errors (as expected by stress test)
+        if validation_errors:
+            return jsonify(error="Validation failed", details=validation_errors), 422
         
         # Generate UUID v4
         warrior_id = str(uuid.uuid4())
@@ -56,9 +90,17 @@ def create_warrior_endpoint():
         })
         response.status_code = 201
         response.headers['Location'] = f'/warrior/{warrior_id}'
+        
+        # Log performance metrics
+        elapsed = (time.time() - start_time) * 1000
+        logger.debug(f"POST /warrior completed in {elapsed:.2f}ms")
         return response
         
     except Exception as e:
+        # Log the error for debugging
+        import traceback
+        elapsed = (time.time() - start_time) * 1000
+        logger.error(f"Error creating warrior after {elapsed:.2f}ms: {e}\n{traceback.format_exc()}")
         return jsonify(error=str(e)), 500
 
 

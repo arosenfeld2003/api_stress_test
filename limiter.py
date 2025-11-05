@@ -108,7 +108,18 @@ signal.signal(signal.SIGINT, handle_shutdown)
 signal.signal(signal.SIGTERM, handle_shutdown)
 
 if __name__ == '__main__':
+    import os
     # Initialize database schema
     initialize_db()
-    # Never use Flask's built-in server for production!
-    app.run(host="0.0.0.0", port=5001)
+    
+    # Get port from environment variable, default to 5001 for normal operation
+    # Set PORT=9999 for stress testing
+    port = int(os.getenv('PORT', 5001))
+    host = os.getenv('HOST', '0.0.0.0')
+    
+    # For stress testing, use threaded mode for better concurrency
+    # For production, use a proper WSGI server like gunicorn
+    threaded = os.getenv('FLASK_THREADED', 'false').lower() == 'true'
+    
+    app.logger.info(f"Starting Flask app on {host}:{port} (threaded={threaded})")
+    app.run(host=host, port=port, threaded=threaded)

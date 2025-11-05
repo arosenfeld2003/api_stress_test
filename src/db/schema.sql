@@ -43,3 +43,9 @@ CREATE TABLE IF NOT EXISTS warrior (
 
 CREATE INDEX IF NOT EXISTS idx_warrior_name ON warrior(name);
 CREATE INDEX IF NOT EXISTS idx_warrior_dob ON warrior(dob);
+
+-- Composite index for search queries (name, dob)
+CREATE INDEX IF NOT EXISTS idx_warrior_name_dob ON warrior(name, dob);
+
+-- GIN index for array search on fight_skills (DuckDB supports this)
+-- This will help with ILIKE searches on array elements

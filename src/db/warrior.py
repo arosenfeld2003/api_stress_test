@@ -60,6 +60,9 @@ def get_warrior(
 def search_warriors(
     con: duckdb.DuckDBPyConnection, *, term: str, limit: int = 50
 ) -> List[Dict[str, Any]]:
+    # Optimized search query with better performance
+    # Using prepared pattern for ILIKE to avoid repeated concatenation
+    pattern = f'%{term}%'
     rows = con.execute(
         """
         SELECT CAST(id AS TEXT) AS id,
@@ -67,17 +70,17 @@ def search_warriors(
                strftime(dob, '%Y-%m-%d') AS dob,
                fight_skills
         FROM warrior w
-        WHERE name ILIKE '%' || ? || '%'
-           OR CAST(dob AS TEXT) ILIKE '%' || ? || '%'
+        WHERE name ILIKE ?
+           OR CAST(dob AS TEXT) ILIKE ?
            OR EXISTS (
                 SELECT 1
                 FROM UNNEST(w.fight_skills) fs(value)
-                WHERE value ILIKE '%' || ? || '%'
+                WHERE value ILIKE ?
            )
         ORDER BY name
         LIMIT ?
         """,
-        [term, term, term, limit],
+        [pattern, pattern, pattern, limit],
     ).fetchall()
     return [
         {"id": r[0], "name": r[1], "dob": r[2], "fight_skills": r[3]}

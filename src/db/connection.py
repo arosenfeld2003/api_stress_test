@@ -74,7 +74,17 @@ def get_connection(read_only: bool = False, apply_schema: bool = False) -> Itera
         if mode == "local":
             db_path = os.getenv("LOCAL_DUCKDB_PATH", DEFAULT_LOCAL_PATH)
             _ensure_parent_dir(db_path)
+            # DuckDB connection - no special config needed for concurrency
+            # DuckDB handles concurrent connections well by default
             con = duckdb.connect(db_path, read_only=read_only)
+            # Optimize for high concurrency workloads
+            if not read_only:
+                # Set thread count for parallel query execution
+                # Adjust based on CPU cores available
+                import multiprocessing
+                thread_count = min(multiprocessing.cpu_count(), 4)
+                con.execute(f"PRAGMA threads={thread_count}")
+                con.execute("PRAGMA enable_progress_bar=false")  # Disable progress bar for performance
         else:
             # Try MotherDuck connection, fall back to local if it fails
             token = os.getenv("MOTHERDUCK_TOKEN", "").strip()
