@@ -29,7 +29,7 @@ fi
 
 # Verify dependencies
 echo "Checking dependencies..."
-if ! python3 -c "import flask; import flask_limiter; import duckdb" 2>/dev/null; then
+if ! python3 -c "import flask; import flask_limiter; import duckdb; import gunicorn" 2>/dev/null; then
     echo "Error: Required Python packages are not installed"
     echo "Run: pip3 install -r requirements.txt"
     exit 1
@@ -37,12 +37,12 @@ fi
 echo "✓ Dependencies OK"
 echo ""
 
-# Start Flask app
-echo "Starting Flask app on port 9999..."
-echo "Logs will be written to: /tmp/flask_stress_test.log"
+# Start Flask app with Gunicorn
+echo "Starting Flask app with Gunicorn on port 9999..."
+echo "Logs will be written to: /tmp/gunicorn_access.log and /tmp/gunicorn_error.log"
 echo ""
 
-PORT=9999 FLASK_THREADED=true python3 limiter.py > /tmp/flask_stress_test.log 2>&1 &
+PORT=9999 gunicorn -c gunicorn_config.py limiter:app &
 FLASK_PID=$!
 
 echo "Flask app started with PID: $FLASK_PID"

@@ -47,7 +47,7 @@ class DuckDBConnectionPool:
             thread_count = min(multiprocessing.cpu_count(), 4)
             con.execute(f"PRAGMA threads={thread_count}")
             con.execute("PRAGMA enable_progress_bar=false")
-            con.execute("PRAGMA memory_limit='1GB'")
+            con.execute("PRAGMA memory_limit='256MB'")
             con.execute("PRAGMA checkpoint_threshold='32MB'")
             con.execute("PRAGMA wal_autocheckpoint=5000")
             con.execute("PRAGMA synchronous=NORMAL")
@@ -59,7 +59,7 @@ class DuckDBConnectionPool:
             return None
     
     @contextmanager
-    def get_connection(self, timeout: float = 5.0) -> Iterator[Optional[duckdb.DuckDBPyConnection]]:
+    def get_connection(self, timeout: float = 30.0) -> Iterator[Optional[duckdb.DuckDBPyConnection]]:
         """Get a connection from the pool with timeout."""
         conn = None
         try:
@@ -85,8 +85,8 @@ class DuckDBConnectionPool:
                 try:
                     # Return connection to pool if healthy
                     if hasattr(conn, 'execute'):
-                        # Quick health check
-                        conn.execute("SELECT 1")
+                        # Quick health check (commented out for performance)
+                        # conn.execute("SELECT 1")
                         self.pool.put_nowait(conn)
                     else:
                         # Connection is bad, create a new one
@@ -132,8 +132,8 @@ def get_pool() -> DuckDBConnectionPool:
         with _pool_lock:
             if _pool is None:
                 db_path = os.getenv("LOCAL_DUCKDB_PATH", "./data/app.duckdb")
-                pool_size = int(os.getenv("DB_POOL_SIZE", "8"))
-                max_connections = int(os.getenv("DB_MAX_CONNECTIONS", "15"))
+                pool_size = int(os.getenv("DB_POOL_SIZE", "20"))
+                max_connections = int(os.getenv("DB_MAX_CONNECTIONS", "40"))
                 _pool = DuckDBConnectionPool(db_path, pool_size, max_connections)
     return _pool
 
