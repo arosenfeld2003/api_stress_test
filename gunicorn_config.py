@@ -40,4 +40,4 @@ tmp_upload_dir = None
 preload_app = False  # Set to False for DuckDB to avoid connection sharing issues
 
 # Performance tuning
-worker_tmp_dir = '/dev/shm'  # Use shared memory for better performance
+# worker_tmp_dir = '/dev/shm'  # Use shared memory for better performance (Linux only)
