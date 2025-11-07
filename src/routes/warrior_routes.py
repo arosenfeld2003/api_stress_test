@@ -2,9 +2,7 @@ from flask import Blueprint, request, jsonify
 import uuid
 import time
 import logging
-from src.db.connection import get_connection
 from src.db.pool import get_pooled_connection
-import os
 from src.db.warrior import (
     create_warrior,
     get_warrior,
@@ -74,26 +72,14 @@ def create_warrior_endpoint():
         warrior_id = str(uuid.uuid4())
         
         # Insert warrior into database using connection pool for better performance
-        use_pool = os.getenv('USE_DB_POOL', 'true').lower() == 'true'
-        
-        if use_pool:
-            with get_pooled_connection() as con:
-                create_warrior(
-                    con,
-                    id=warrior_id,
-                    name=name,
-                    dob=dob,
-                    fight_skills=fight_skills,
-                )
-        else:
-            with get_connection(read_only=False) as con:
-                create_warrior(
-                    con,
-                    id=warrior_id,
-                    name=name,
-                    dob=dob,
-                    fight_skills=fight_skills,
-                )
+        with get_pooled_connection() as con:
+            create_warrior(
+                con,
+                id=warrior_id,
+                name=name,
+                dob=dob,
+                fight_skills=fight_skills,
+            )
         
         # Return 201 with Location header
         response = jsonify({
@@ -122,14 +108,8 @@ def create_warrior_endpoint():
 def get_warrior_endpoint(id):
     """Get warrior by ID. Returns 200 or 404."""
     try:
-        use_pool = os.getenv('USE_DB_POOL', 'true').lower() == 'true'
-        
-        if use_pool:
-            with get_pooled_connection() as con:
-                warrior = get_warrior(con, id=id)
-        else:
-            with get_connection(read_only=True) as con:
-                warrior = get_warrior(con, id=id)
+        with get_pooled_connection() as con:
+            warrior = get_warrior(con, id=id)
         
         if warrior is None:
             return jsonify(error="Warrior not found"), 404
@@ -149,14 +129,8 @@ def search_warrior_endpoint():
         return jsonify(error="Query parameter 't' (search term) is required"), 400
     
     try:
-        use_pool = os.getenv('USE_DB_POOL', 'true').lower() == 'true'
-        
-        if use_pool:
-            with get_pooled_connection() as con:
-                warriors = search_warriors(con, term=search_term, limit=50)
-        else:
-            with get_connection(read_only=True) as con:
-                warriors = search_warriors(con, term=search_term, limit=50)
+        with get_pooled_connection() as con:
+            warriors = search_warriors(con, term=search_term, limit=50)
         
         return jsonify(warriors), 200
         
@@ -168,14 +142,8 @@ def search_warrior_endpoint():
 def count_warrior_endpoint():
     """Count all registered warriors. Returns 200 with count."""
     try:
-        use_pool = os.getenv('USE_DB_POOL', 'true').lower() == 'true'
-        
-        if use_pool:
-            with get_pooled_connection() as con:
-                count = count_warriors(con)
-        else:
-            with get_connection(read_only=True) as con:
-                count = count_warriors(con)
+        with get_pooled_connection() as con:
+            count = count_warriors(con)
         
         return jsonify(count=count), 200
         

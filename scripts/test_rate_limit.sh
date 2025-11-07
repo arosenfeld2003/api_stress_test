@@ -1,7 +1,9 @@
 #!/bin/bash
 # Test rate limiter on Flask app
 
-ENDPOINT="${1:-http://localhost:5000/health}"
+# Get port from environment variable, default to 5001 to match Flask app default
+PORT="${PORT:-5001}"
+ENDPOINT="${1:-http://localhost:${PORT}/health}"
 REQUESTS="${2:-20}"
 MODE="${3:-rapid}"
 
@@ -11,6 +13,38 @@ echo "=========================================="
 echo "Endpoint: $ENDPOINT"
 echo "Requests: $REQUESTS"
 echo "Mode: $MODE"
+echo ""
+
+# Check database connectivity before running tests
+echo "Verifying database connectivity..."
+DB_OUTPUT=$(python3 -c "
+import sys
+sys.path.insert(0, '.')
+from src.db.pool import verify_database_health
+success, message = verify_database_health()
+if success:
+    print(message)
+    sys.exit(0)
+else:
+    print(message, file=sys.stderr)
+    sys.exit(1)
+" 2>&1)
+
+DB_STATUS=$?
+if [ $DB_STATUS -ne 0 ]; then
+    echo "❌ Database connectivity check failed!"
+    echo "$DB_OUTPUT"
+    echo ""
+    echo "Please ensure:"
+    echo "  - Database is properly configured (check DB_MODE, MOTHERDUCK_TOKEN, etc.)"
+    echo "  - For local mode: database file is accessible"
+    echo "  - For MotherDuck mode: MOTHERDUCK_TOKEN is set and valid"
+    echo ""
+    echo "Run 'python diagnose_db.py' for detailed diagnostics."
+    exit 1
+fi
+
+echo "✓ $DB_OUTPUT"
 echo ""
 
 # Check if endpoint is reachable
@@ -33,7 +67,7 @@ START_TIME=$(date +%s.%N)
 for i in $(seq 1 $REQUESTS); do
   RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" "$ENDPOINT" 2>&1)
   TIMESTAMP=$(date +%H:%M:%S.%3N)
-  
+
   case "$RESPONSE" in
     "200")
       echo "[$TIMESTAMP] Request $i: ✓ 200 OK"
@@ -55,7 +89,7 @@ for i in $(seq 1 $REQUESTS); do
       ((FAILED++))
       ;;
   esac
-  
+
   # Sleep between requests if not in rapid mode
   if [ "$MODE" != "rapid" ]; then
     sleep 0.1

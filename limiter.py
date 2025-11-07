@@ -7,6 +7,7 @@ import sys
 import os
 from src.routes.warrior_routes import warrior_bp
 from src.db.connection import get_connection
+from src.db.pool import verify_database_health
 from src.security import IPBlocker
 
 app = Flask(__name__)
@@ -90,15 +91,25 @@ app.register_blueprint(warrior_bp)
 
 # Initialize database schema on startup
 def initialize_db():
-    """Initialize database schema if needed."""
+    """Initialize database schema if needed and verify connectivity."""
     try:
+        # Initialize schema first
         with get_connection(read_only=False, apply_schema=True) as con:
             # Schema is automatically applied by get_connection when apply_schema=True
             pass
+        
+        # Verify database connectivity using connection pool
+        success, message = verify_database_health()
+        if not success:
+            app.logger.error(f"Database health check failed: {message}")
+            app.logger.error("Application cannot start without a working database connection.")
+            sys.exit(1)
+        
+        app.logger.info(f"Database initialized and verified: {message}")
     except Exception as e:
         app.logger.error(f"Failed to initialize database: {e}")
-        # Don't exit - allow app to start even if DB init fails
-        # (DB will be initialized on first request if needed)
+        app.logger.error("Application cannot start without a working database connection.")
+        sys.exit(1)
 
 @app.route('/health')
 @limiter.exempt  # Exclude health endpoint from rate limiting
