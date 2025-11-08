@@ -1,25 +1,39 @@
-# Warrior API - Rate-Limited REST API with MotherDuck
+# Warrior API - High-Performance REST API
 
 Qwasar MSCS Engineering Lab - Project 2
 
-A Flask-based REST API for managing warriors with connection pooling, rate limiting, and comprehensive stress testing capabilities.
+A production-ready Flask-based REST API for managing warriors with PostgreSQL, connection pooling, rate limiting, and comprehensive stress testing.
+
+## Performance Achievements
+
+**99.8% success rate** at 107+ req/sec with sub-100ms response times after optimizing for high-concurrency workloads.
+
+| Metric | Initial (DuckDB) | Final (PostgreSQL) | Improvement |
+|--------|-----------------|-------------------|-------------|
+| Success Rate | 12.6% ❌ | **99.8% ✅** | **+87.2% (8x)** |
+| P95 Latency | 12.8s ❌ | **66ms ✅** | **-99.5% (194x faster)** |
+| Throughput | 76 req/s | **107 req/s ✅** | **+40%** |
+
+📖 **[Read the full performance journey →](DEBUGGING_REPORT.md)**
 
 ## Overview
 
 This project demonstrates a production-ready API with:
 - **Flask REST API** for warrior CRUD operations
-- **Connection pooling** with MotherDuck cloud database support
-- **Rate limiting** to protect against abuse (configurable)
-- **Gatling stress testing** for performance validation
+- **PostgreSQL** with connection pooling for high-concurrency workloads
+- **DuckDB support** (kept for analytics and comparative testing)
+- **Rate limiting** to protect against abuse
+- **Gatling stress testing** with detailed analysis tools
 
 ## Features
 
 - **REST API**: Create, read, search, and count warriors
-- **Database Connection Pool**: Optimized connection management for high-load scenarios
-- **MotherDuck Integration**: Cloud database with local fallback
-- **Rate Limiting**: Application-level protection (configurable requests per minute)
-- **Stress Testing**: Gatling-based load and rate limit validation
-- **Health Checks**: Database connectivity verification on startup
+- **High-Performance Database**: PostgreSQL with optimized connection pooling
+- **Dual Database Support**: PostgreSQL for production, DuckDB for analytics/testing
+- **Connection Pooling**: Handles 100+ concurrent connections efficiently  
+- **Rate Limiting**: Nginx + application-level protection
+- **Stress Testing**: Gatling-based load testing with analysis tools
+- **Comprehensive Documentation**: Performance analysis, migration guides, and lessons learned
 
 ## Quick Start
 
@@ -40,13 +54,35 @@ brew install openjdk@11
 brew install sbt
 ```
 
-### 2. Configure Database
+### 2. Set Up Database
 
-**Option A: Local DuckDB** (default, no configuration needed)
+**Option A: PostgreSQL (Recommended for Production)**
 
-**Option B: MotherDuck Cloud**
+Automated setup with Docker:
+```bash
+./scripts/setup_postgres.sh
+```
+
+Or manually:
+```bash
+# Start PostgreSQL
+docker-compose up -d postgres
+
+# Configure environment
+cp .env.example .env
+# Edit .env: Set DB_MODE=postgresql
+```
+
+**Option B: DuckDB (For Analytics/Testing)**
 
 Create a `.env` file:
+```bash
+DB_MODE=local
+LOCAL_DUCKDB_PATH=./data/app.duckdb
+```
+
+**Option C: MotherDuck Cloud (Analytics)**
+
 ```bash
 DB_MODE=motherduck
 MOTHERDUCK_TOKEN=your_token_here
@@ -227,34 +263,51 @@ When rate limit is exceeded, the API returns:
 
 ```
 api_stress_test/
-├── README.md                   # This file
-├── limiter.py                  # Flask app entry point
-├── requirements.txt            # Python dependencies
-├── diagnose_db.py              # Database diagnostic tool
-├── .env                        # Environment config (create this)
+├── README.md                            # This file
+├── limiter.py                           # Flask app entry point
+├── requirements.txt                     # Python dependencies  
+├── docker-compose.yml                   # PostgreSQL + pgAdmin setup
+├── schema_postgresql.sql                # PostgreSQL schema with indexes
+├── .env                                 # Environment config (create this)
+│
+├── Documentation/
+│   ├── DEBUGGING_REPORT.md              # Performance analysis & problem diagnosis
+│   ├── POSTGRESQL_MIGRATION.md          # Complete PostgreSQL migration guide
+│   ├── PERFORMANCE_TUNING_SUMMARY.md    # Full comparison & lessons learned
+│   └── QUICK_START.md                   # Quick reference guide
 │
 ├── src/
 │   ├── db/
-│   │   ├── connection.py       # Database connection management
-│   │   ├── pool.py             # Connection pool implementation
-│   │   ├── warrior.py          # Warrior data access functions
-│   │   └── schema.sql          # Database schema
+│   │   ├── adapter.py                   # Universal DB adapter (switches DB based on mode)
+│   │   ├── connection_postgres.py       # PostgreSQL connection pool (production)
+│   │   ├── warrior_postgres.py          # PostgreSQL data access (production)
+│   │   ├── connection.py                # DuckDB connection (analytics/testing)
+│   │   ├── pool.py                      # DuckDB pool (analytics/testing)
+│   │   ├── warrior.py                   # DuckDB data access (analytics/testing)
+│   │   └── schema.sql                   # DuckDB schema
 │   ├── routes/
-│   │   └── warrior_routes.py   # API endpoints
+│   │   └── warrior_routes.py            # API endpoints
 │   └── security/
-│       └── ip_blocker.py       # IP blocking/abuse detection
+│       └── ip_blocker.py                # IP blocking/abuse detection
 │
 ├── scripts/
-│   ├── test_rate_limit.sh      # Basic API test script
-│   └── deploy_nginx_config.sh  # Nginx deployment script
+│   ├── setup_postgres.sh                # Automated PostgreSQL setup
+│   ├── migrate_duckdb_to_postgres.py    # Data migration tool
+│   ├── analyze_stress_test.py           # Stress test analysis & comparison
+│   ├── quick_fix_test.sh                # Quick DuckDB fixes (temporary)
+│   ├── test_rate_limit.sh               # Basic API test script
+│   └── deploy_nginx_config.sh           # Nginx deployment script
 │
-├── api_under_stress/           # Git submodule (Gatling stress tests)
+├── api_under_stress/                    # Git submodule (Gatling stress tests)
 │   └── stress-test/
-│       ├── run-test.sh         # Run Gatling tests
-│       └── user-files/         # Test scenarios and results
+│       ├── run-test.sh                  # Run Gatling tests
+│       └── user-files/
+│           ├── simulations/             # Test scenarios
+│           ├── resources/               # Test data
+│           └── results/                 # Test results with HTML reports
 │
 └── data/
-    └── app.duckdb              # Local database file
+    └── app.duckdb                       # Local DuckDB file (kept for analytics)
 ```
 
 ## Troubleshooting
@@ -291,8 +344,129 @@ cat .env
 
 ### Updating Database Schema
 
-1. Modify `src/db/schema.sql`
-2. Restart Flask app (schema auto-applies on startup)
+1. Modify `src/db/schema.sql` (DuckDB) or `schema_postgresql.sql` (PostgreSQL)
+2. Restart Flask app (schema auto-applies on startup for DuckDB)
+3. For PostgreSQL: `docker exec warrior-postgres psql -U warrior -d warrior_api -f schema_postgresql.sql`
+
+## Performance Analysis & Lessons Learned
+
+### The Journey: DuckDB → PostgreSQL
+
+This project started with DuckDB as the embedded database but encountered severe performance issues under stress testing. The migration to PostgreSQL provides valuable lessons about database selection for high-concurrency workloads.
+
+#### Initial Problem: 87% Error Rate
+
+**Symptoms:**
+- 12.6% success rate under load (5132 failures / 5880 requests)
+- 503 Service Unavailable errors
+- Worker timeouts after 30 seconds
+- P95 latency of 12.8 seconds
+
+**Root Cause:**
+DuckDB is an embedded analytical database (OLAP) designed for single-process analytics, not high-concurrency transactional workloads (OLTP). With 29 Gunicorn workers competing for write access:
+- DuckDB can only handle 1-2 concurrent writers
+- Workers blocked waiting for database write locks  
+- Connection pool exhaustion led to timeouts
+- **Fundamental architectural mismatch**
+
+#### Solution: PostgreSQL Migration
+
+**Why PostgreSQL?**
+- ✅ Designed for high-concurrency OLTP workloads
+- ✅ Handles 100+ concurrent writes easily
+- ✅ True MVCC with row-level locking
+- ✅ Battle-tested for web APIs
+- ✅ Rich tooling ecosystem
+
+**Results:**
+- **Success rate: 12.6% → 99.8%** (+87.2%)
+- **P95 latency: 12.8s → 66ms** (-99.5%, 194x faster)
+- **Throughput: 76 → 107 req/s** (+40%)
+- **Worker timeouts: Eliminated**
+
+#### Key Lessons
+
+1. **Choose the Right Tool**: DuckDB excels at analytics but isn't designed for concurrent writes. PostgreSQL is purpose-built for transactional workloads.
+
+2. **Connection Pool Sizing Matters**: With PostgreSQL's 200-connection limit and 29 workers, we set 5 connections/worker (145 total) to avoid exhaustion.
+
+3. **Stress Testing Reveals Architectural Issues**: What works in development can fail dramatically under load. Always stress test before production.
+
+4. **Preserve Comparative Code**: We kept DuckDB code for analytics use cases and as a reference for the dramatic performance difference.
+
+#### Documentation
+
+📚 **Comprehensive guides for this performance journey:**
+
+- **[DEBUGGING_REPORT.md](DEBUGGING_REPORT.md)** - Detailed analysis of the problem with evidence
+- **[POSTGRESQL_MIGRATION.md](POSTGRESQL_MIGRATION.md)** - Complete PostgreSQL setup guide
+- **[PERFORMANCE_TUNING_SUMMARY.md](PERFORMANCE_TUNING_SUMMARY.md)** - Full comparison & decisions
+- **[QUICK_START.md](QUICK_START.md)** - Quick reference guide
+
+#### Database Comparison
+
+| Feature | DuckDB | PostgreSQL |
+|---------|--------|------------|
+| **Use Case** | Analytics (OLAP) | Transactions (OLTP) |
+| **Concurrent Writes** | 1-2 | 100+ |
+| **Deployment** | Embedded file | Client-server |
+| **Best For** | Data analysis, reporting | Web APIs, high concurrency |
+| **Our Success Rate** | 12.6% @ 76 req/s | 99.8% @ 107 req/s |
+
+#### When to Use Each Database
+
+**Use PostgreSQL when:**
+- Building web APIs or transactional applications
+- Need high write concurrency (multiple users writing simultaneously)
+- Require production-grade reliability and monitoring
+- This is our **production choice**
+
+**Use DuckDB when:**
+- Performing analytics on large datasets
+- Running in a single-process context
+- Need fast analytical queries
+- Generating reports or doing data science
+- We keep it for **comparative testing and analytics**
+
+#### Stress Testing Tools
+
+This project includes comprehensive stress testing:
+
+```bash
+# Run full stress test
+cd api_under_stress/stress-test
+./run-test.sh
+
+# Analyze latest results
+python3 scripts/analyze_stress_test.py --latest
+
+# Compare two test runs
+python3 scripts/analyze_stress_test.py --compare <dir1> <dir2>
+```
+
+The analysis tool provides:
+- Success/failure rates
+- Response time percentiles (P50, P75, P95, P99)
+- Throughput metrics
+- Error breakdown
+- Before/after comparisons
+
+#### Architecture
+
+```
+Client Request
+    ↓
+Nginx (Rate Limiting: 1000 req/s)
+    ↓
+Gunicorn (29 workers)
+    ↓
+Flask Application (Database Adapter)
+    ↓
+PostgreSQL (200 max connections)
+    - 5 connections per worker = 145 total
+    - Connection pooling prevents exhaustion
+    - Optimized for concurrent writes
+```
 
 ## License
 

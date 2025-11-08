@@ -2,8 +2,9 @@ from flask import Blueprint, request, jsonify
 import uuid
 import time
 import logging
-from src.db.pool import get_pooled_connection
-from src.db.warrior import (
+# Universal database adapter - switches between DuckDB and PostgreSQL based on DB_MODE
+from src.db.adapter import (
+    get_pooled_connection,
     create_warrior,
     get_warrior,
     search_warriors,
