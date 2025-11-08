@@ -1,0 +1,97 @@
+version: '3.8'
+
+services:
+  # PostgreSQL database for high-concurrency warrior API
+  postgres:
+    image: postgres:15-alpine
+    container_name: warrior-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: warrior_api
+      POSTGRES_USER: warrior
+      POSTGRES_PASSWORD: warrior_dev_password
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=en_US.UTF-8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./schema_postgresql.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U warrior -d warrior_api"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: >
+      postgres
+      -c shared_buffers=256MB
+      -c effective_cache_size=1GB
+      -c work_mem=4MB
+      -c maintenance_work_mem=64MB
+      -c max_connections=200
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=16MB
+      -c default_statistics_target=100
+      -c random_page_cost=1.1
+      -c effective_io_concurrency=200
+      -c max_wal_size=2GB
+      -c min_wal_size=1GB
+      -c log_statement=none
+      -c log_duration=off
+    networks:
+      - warrior_network
+
+  # Optimized Nginx reverse proxy
+  nginx:
+    image: nginx:alpine
+    container_name: warrior-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf.optimized:/etc/nginx/nginx.conf:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/nginx_status"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    networks:
+      - warrior_network
+
+  # Optional: pgAdmin for database management
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: warrior-pgadmin
+    restart: unless-stopped
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@warrior.local
+      PGADMIN_DEFAULT_PASSWORD: admin
+      PGADMIN_CONFIG_SERVER_MODE: 'False'
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - warrior_network
+
+volumes:
+  postgres_data:
+    driver: local
+  pgadmin_data:
+    driver: local
+
+networks:
+  warrior_network:
+    driver: bridge
+
+# Usage:
+# 1. Start all services:  docker-compose -f docker-compose-full.yml up -d
+# 2. View logs:          docker-compose -f docker-compose-full.yml logs -f
+# 3. Stop services:      docker-compose -f docker-compose-full.yml down
+# 4. Reset everything:   docker-compose -f docker-compose-full.yml down -v
+
