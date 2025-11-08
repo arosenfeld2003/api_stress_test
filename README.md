@@ -1,587 +1,298 @@
-# API Stress Test - Warrior API
+# Warrior API - Rate-Limited REST API with MotherDuck
 
 Qwasar MSCS Engineering Lab - Project 2
 
-A Flask-based REST API for managing warriors with comprehensive rate limiting at both the application and reverse proxy levels. Includes stress testing capabilities using Gatling.
+A Flask-based REST API for managing warriors with connection pooling, rate limiting, and comprehensive stress testing capabilities.
 
 ## Overview
 
-This project implements a production-ready API with:
+This project demonstrates a production-ready API with:
+- **Flask REST API** for warrior CRUD operations
+- **Connection pooling** with MotherDuck cloud database support
+- **Rate limiting** to protect against abuse (configurable)
+- **Gatling stress testing** for performance validation
 
-- **Flask REST API** with warrior CRUD operations
-- **Dual-layer rate limiting**: Flask application (100 req/min) + Nginx reverse proxy (5 req/s)
-- **DuckDB** database for persistence (local or MotherDuck)
-- **Nginx reverse proxy** via GHCR container with SSL/TLS and security headers
-- **Gatling stress tests** for performance and rate limit validation
+## Features
 
-## Architecture
+- **REST API**: Create, read, search, and count warriors
+- **Database Connection Pool**: Optimized connection management for high-load scenarios
+- **MotherDuck Integration**: Cloud database with local fallback
+- **Rate Limiting**: Application-level protection (configurable requests per minute)
+- **Stress Testing**: Gatling-based load and rate limit validation
+- **Health Checks**: Database connectivity verification on startup
 
-```
-┌─────────────────┐
-│   Client/Test   │
-└────────┬────────┘
-         │ HTTPS (443)
-         ▼
-┌─────────────────┐
-│  Nginx Proxy    │  ← Rate limit: 1000 req/s (burst 200)
-│  (GHCR Container│  ← SSL/TLS termination
-└────────┬────────┘  ← Security headers
-         │ HTTP (5001)
-         ▼
-┌─────────────────┐
-│  Flask App      │  ← Rate limit: 60,000 req/min per IP (configurable)
-│  (limiter.py)   │  ← Warrior API routes
-└────────┬────────┘
-         │
-         ▼
-┌─────────────────┐
-│   DuckDB        │  ← Local file or MotherDuck
-│   Database      │
-└─────────────────┘
-```
+## Quick Start
 
-### Components
-
-1. **Flask Application** (`limiter.py`)
-   - REST API endpoints for warrior management
-   - Application-level rate limiting (100 requests/minute per IP)
-   - Automatic database schema initialization
-   - Graceful shutdown handling
-
-2. **Nginx Reverse Proxy** (GHCR Container)
-   - SSL/TLS termination with Let's Encrypt certificates
-   - Proxy-level rate limiting (5 requests/second with burst of 10)
-   - Connection limits (20 concurrent per IP)
-   - Security headers (HSTS, X-Frame-Options, etc.)
-   - Timeout protection against slowloris attacks
-
-3. **Database Layer** (`src/db/`)
-   - DuckDB for local file-based storage
-   - Optional MotherDuck cloud integration
-   - Schema management via SQL scripts
-
-## API Endpoints
-
-### Health Check
-- **GET** `/health`
-  - Returns: `{"status": "ok"}`
-  - Status: 200
-
-### Warrior Management
-
-#### Create Warrior
-- **POST** `/warrior`
-  - **Request Body:**
-    ```json
-    {
-      "name": "Master Yoda",
-      "dob": "1970-01-01",
-      "fight_skills": ["BJJ", "KungFu", "Judo"]
-    }
-    ```
-  - **Response:** 201 Created
-  - **Headers:** `Location: /warrior/{uuid}`
-  - **Body:** Created warrior object with generated UUID
-
-#### Get Warrior by ID
-- **GET** `/warrior/{id}`
-  - **Response:** 200 OK (warrior found) or 404 Not Found
-  - **Body:** Warrior object with UUID, name, dob, fight_skills
-
-#### Search Warriors
-- **GET** `/warrior?t={search_term}`
-  - **Query Parameter:** `t` (required) - search term
-  - **Response:** 200 OK with array of warriors (max 50 results)
-  - **Error:** 400 Bad Request if `t` parameter is missing
-  - Searches across name, date of birth, and fight skills
-
-#### Count Warriors
-- **GET** `/counting-warriors`
-  - **Response:** 200 OK
-  - **Body:** `{"count": 42}`
-
-## Prerequisites
-
-- **Python 3.8+**
-- **pip** (Python package manager)
-- **Docker** (for nginx container)
-- **Java JDK 8+** (for Gatling stress tests)
-- **sbt** (Scala Build Tool, for Gatling)
-
-## Setup
-
-### 1. Python Environment
+### 1. Install Dependencies
 
 ```bash
 # Create virtual environment (recommended)
 python3 -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+source .venv/bin/activate
 
-# Install dependencies
-pip install --upgrade pip
+# Install Python dependencies
 pip install -r requirements.txt
+
+# Install Java (for Gatling stress tests)
+brew install openjdk@11
+
+# Install sbt (Scala Build Tool)
+brew install sbt
 ```
 
-### 2. Database Configuration
+### 2. Configure Database
 
-The app uses DuckDB by default (local file storage). No additional setup required.
+**Option A: Local DuckDB** (default, no configuration needed)
 
-**Optional: MotherDuck Cloud Database**
+**Option B: MotherDuck Cloud**
 
-Create a `.env` file in the project root:
-
+Create a `.env` file:
 ```bash
 DB_MODE=motherduck
 MOTHERDUCK_TOKEN=your_token_here
-MOTHERDUCK_DATABASE=api_stress_test  # optional
+MOTHERDUCK_DATABASE=my_db
 ```
 
-### 3. Initialize Database Schema
-
-The database schema is automatically initialized when the Flask app starts. To manually initialize:
+### 3. Run the API
 
 ```bash
-python -c "from src.db.connection import get_connection; \
-    with get_connection(read_only=False, apply_schema=True) as con: pass"
+python3 limiter.py
 ```
 
-This creates the `warrior` table and necessary indexes in `./data/app.duckdb`.
+The API runs on `http://localhost:5001`.
 
-## Running the Application
+### 4. Test the API
 
-This application **must** be run through the GHCR nginx container to enable dual-layer rate limiting (nginx + Flask). Direct access to the Flask app bypasses the nginx rate limiter and is not supported for testing.
-
-### 1. Build and Run Nginx Container
-
-**If the image doesn't exist in GHCR, build it locally first:**
-
+**Basic connectivity test:**
 ```bash
-# Build nginx image locally
-./scripts/build_nginx_image.sh
-
-# Run container (macOS/Windows with Docker Desktop)
-docker run -d \
-  --name api_stress_test_nginx \
-  -p 443:443 \
-  -p 80:80 \
-  ghcr.io/arosenfeld2003/api-stress-test-nginx:latest
+./scripts/test_rate_limit.sh
 ```
 
-**Alternatively, if the image is already in GHCR:**
-
+**Stress test with Gatling:**
 ```bash
-# Pull nginx container
-docker pull ghcr.io/arosenfeld2003/api-stress-test-nginx:latest
-
-# Run container (macOS/Windows with Docker Desktop)
-docker run -d \
-  --name api_stress_test_nginx \
-  -p 443:443 \
-  -p 80:80 \
-  ghcr.io/arosenfeld2003/api-stress-test-nginx:latest
-
-# For Linux (use --network host instead)
-docker run -d \
-  --name api_stress_test_nginx \
-  -p 443:443 \
-  -p 80:80 \
-  --network host \
-  ghcr.io/arosenfeld2003/api-stress-test-nginx:latest
+cd api_under_stress/stress-test
+./run-test.sh
 ```
 
-**Note:** 
-- On **macOS/Windows** (Docker Desktop): Use port mapping only (no `--network host`). The nginx config uses `host.docker.internal` to reach Flask on the host.
-- On **Linux**: You can use `--network host` to allow nginx to connect to Flask on `localhost:5001`.
-- For production deployments, use a Docker network instead.
+## API Endpoints
 
-### 2. Deploy Nginx Configuration
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | `/health` | Health check (returns `{"status": "ok"}`) |
+| POST | `/warrior` | Create a warrior (returns 201 with Location header) |
+| GET | `/warrior/{id}` | Get warrior by UUID (returns 200 or 404) |
+| GET | `/warrior?t={term}` | Search warriors (returns array of warriors) |
+| GET | `/counting-warriors` | Count total warriors (returns `{"count": N}`) |
+
+### Example: Create a Warrior
 
 ```bash
-# Deploy nginx.conf to container
-./scripts/deploy_nginx_config.sh api_stress_test_nginx
+curl -X POST http://localhost:5001/warrior \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Master Yoda",
+    "dob": "1970-01-01",
+    "fight_skills": ["BJJ", "KungFu", "Judo"]
+  }'
 ```
 
-This script:
-- Copies `nginx.conf` to the container
-- Validates the configuration
-- Reloads nginx gracefully
-
-### 3. Start Flask Application
-
-```bash
-python limiter.py
-```
-
-The Flask app will run on `localhost:5001` (internal, accessed only by nginx).
-
-### 4. Access API Through Nginx
-
-The API is accessible through nginx:
-
-- **HTTP:** `http://localhost:80` (for local testing)
-- **HTTPS:** `https://localhost:443` (requires SSL certificates)
-
-**For local testing without SSL certificates**, you can:
-- Use HTTP on port 80, or
-- Modify `nginx.conf` to remove SSL requirements, or
-- Generate self-signed certificates for testing
-
-The nginx container acts as a reverse proxy and rate limiter, forwarding requests to the Flask app on port 5001.
-
-### Environment Variables
-
-Create a `.env` file (optional):
-
-```bash
-# Database configuration
-DB_MODE=local  # or 'motherduck'
-LOCAL_DUCKDB_PATH=./data/app.duckdb
-
-# MotherDuck (if using cloud DB)
-MOTHERDUCK_TOKEN=your_token_here
-MOTHERDUCK_DATABASE=api_stress_test
-
-# Flask rate limiting (default: 60000 = 1000 req/s)
-FLASK_RATE_LIMIT=60000
+**Response** (201 Created):
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "name": "Master Yoda",
+  "dob": "1970-01-01",
+  "fight_skills": ["BJJ", "KungFu", "Judo"]
+}
 ```
 
 ## Testing
 
-**Important:** All testing must go through the nginx proxy to validate both nginx and Flask rate limiting. Direct access to Flask (port 5001) bypasses the nginx rate limiter.
-
-### Quick API Test
-
-All requests go through nginx on port 80 (or 443 for HTTPS):
+### Basic Rate Limit Test
 
 ```bash
-# Health check (through nginx)
-curl http://localhost:80/health
+# Test with default settings (20 requests to /health)
+./scripts/test_rate_limit.sh
 
-# Create a warrior
-curl -X POST http://localhost:80/warrior \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Master Yoda", "dob": "1970-01-01", "fight_skills": ["BJJ", "KungFu"]}'
+# Custom endpoint and request count
+./scripts/test_rate_limit.sh http://localhost:5001/counting-warriors 50
 
-# Get warrior (use UUID from previous response)
-curl http://localhost:80/warrior/{uuid}
-
-# Search warriors
-curl "http://localhost:80/warrior?t=Yoda"
-
-# Count warriors
-curl http://localhost:80/counting-warriors
+# Slower requests (not rapid fire)
+./scripts/test_rate_limit.sh http://localhost:5001/health 20 slow
 ```
 
-### Rate Limiter Tests
+The script verifies:
+- Database connectivity before running tests
+- API endpoint availability
+- Response times and success rates
 
-All tests go through nginx to validate **both** nginx (1000 req/s) and Flask (60,000 req/min = 1000 req/s) rate limiters.
+### Stress Testing with Gatling
 
-#### Option 1: Simple Bash Script
+**Requirements:** Nginx container must be running for dual-layer rate limiting.
+
+**Setup (one-time):**
 
 ```bash
-# Basic test (20 requests) - uses nginx endpoint
-./scripts/test_rate_limit.sh http://localhost:80/health 20
+# 1. Ensure nginx container is running
+docker ps | grep nginx
 
-# Custom endpoint and requests
-./scripts/test_rate_limit.sh http://localhost:80/counting-warriors 50
-
-# Slower requests (not rapid mode)
-./scripts/test_rate_limit.sh http://localhost:80/health 20 slow
+# 2. Deploy local nginx config (no SSL, allows HTTP on port 80)
+./scripts/deploy_nginx_config.sh api_stress_test_nginx nginx.conf.local
 ```
 
-#### Option 2: Python Test Suite
+**Run Stress Tests:**
 
 ```bash
-python test_rate_limiter.py
+# Terminal 1: Start Flask with optimized settings
+./scripts/start_for_stress_test.sh
+
+# Terminal 2: Run Gatling stress tests (they connect via nginx on port 80)
+cd api_under_stress/stress-test
+./run-test.sh
+
+# View results (HTML reports generated in user-files/results/)
 ```
 
-**Note:** The test suite is configured to use `http://localhost:80` by default (nginx proxy).
+**Architecture:** `Gatling` → `Nginx:80` (1000 req/s limit) → `Flask:5001` (10,000 req/s limit)
 
-This comprehensive test suite includes:
-- Rapid sequential requests (to test Flask limit)
-- Concurrent requests (50 requests, 10 threads)
-- Sustained rate testing (2 req/s for 10s)
-
-**Expected Results:**
-- **Nginx limit (1000 req/s):** Requests exceeding 1000/s will get 429 errors from nginx
-- **Flask limit (60,000 req/min = 1000 req/s):** Requests within nginx limits but exceeding 60,000/min will get 429 errors from Flask
-- Nginx rate limiting is evaluated **first**, so high-rate requests (>1000/s) will be blocked before reaching Flask
-
-### Gatling Stress Tests
-
-Comprehensive performance and rate limit validation tests:
-
-```bash
-cd gatling
-
-# Run stress tests
-sbt "Gatling / testOnly test.WarriorApiSimulation"
-
-# View results
-# Results will be in: gatling/target/gatling/warriorapisimulation-<timestamp>/index.html
-```
+The optimized startup script sets:
+- **Connection Pool**: 50 connections (max 100)
+- **Rate Limit**: 600,000 req/min (10,000 req/s)
+- **Threading**: Enabled for better concurrency
+- **IP Blocking**: Localhost whitelisted
 
 The Gatling simulation tests:
-- All warrior API endpoints
-- Multiple load scenarios (warm-up, normal, stress, peak)
-- Rate limit validation (intentionally exceeds limits)
-- Response time analysis
-- Throughput metrics
+- All warrior API endpoints through nginx
+- Dual-layer rate limiting validation (nginx + Flask)
+- Multiple load scenarios (warm-up, ramp-up to 100 users/sec)
+- Response time analysis under load
+- Concurrent user simulation (~3 minute test duration)
 
-See `gatling/README.md` for detailed documentation.
+## Database Configuration
 
-### Advanced Testing Tools
+### Local DuckDB (Default)
 
-All load testing must go through nginx:
+No configuration needed. The database file is created at `./data/app.duckdb`.
 
-#### Apache Bench
+### MotherDuck Cloud
 
-```bash
-# Test through nginx (will hit 1000 req/s limit at high concurrency)
-ab -n 1200 -c 100 http://localhost:80/health
-
-# Or test specific endpoint
-ab -n 120 -c 10 http://localhost:80/counting-warriors
-```
-
-#### wrk
+Set environment variables in `.env` file:
 
 ```bash
-# Test through nginx
-wrk -t2 -c10 -d30s http://localhost:80/health
+# Database mode
+DB_MODE=motherduck
+
+# MotherDuck authentication
+MOTHERDUCK_TOKEN=your_token_here
+
+# Database name (optional, uses default if not set)
+MOTHERDUCK_DATABASE=my_db
+
+# Connection pool settings (optional)
+DB_POOL_SIZE=20
+DB_MAX_CONNECTIONS=40
 ```
 
-**Note:** These tools send high-concurrency requests that will trigger nginx rate limiting (1000 req/s). Adjust test parameters accordingly.
+### Database Health Check
 
-## Rate Limiting Configuration
+The application automatically verifies database connectivity on startup:
+- Tests connection pool initialization
+- Executes test query to verify database works
+- Exits with clear error if database is unavailable
 
-### Flask Application Level
-- **Limit:** Configurable via `FLASK_RATE_LIMIT` environment variable (default: 60,000 requests per minute = 1000 req/s)
-- **Implementation:** `flask-limiter` with `get_remote_address`
-- **Storage:** In-memory (resets on restart)
-- **Status Code:** 429 Too Many Requests
-- **Configuration:** Set `FLASK_RATE_LIMIT` environment variable to override (e.g., `FLASK_RATE_LIMIT=60000`)
+Manual diagnostic:
+```bash
+python diagnose_db.py
+```
 
-### Nginx Proxy Level
-- **Limit:** 1000 requests per second (with burst of 200)
-- **Implementation:** `limit_req_zone` and `limit_req` directives
-- **Connection Limit:** 200 concurrent connections per IP
-- **Status Code:** 429 Too Many Requests
+## Rate Limiting
 
-**Rate Limit Behavior:**
-- Nginx rate limiting is evaluated **first** (at proxy level)
-- Flask rate limiting is evaluated **second** (at application level)
-- Requests exceeding nginx limits will never reach Flask
-- Requests within nginx limits may still be limited by Flask
-
-## IP Blocking and Abuse Detection
-
-The API includes an intelligent IP blocking system that automatically detects and blocks IP addresses sending illegitimate requests. This complements rate limiting by identifying persistent abusers based on behavior patterns.
-
-### Features
-
-- **Automatic Abuse Detection**: Tracks request patterns per IP and identifies abusive behavior
-- **Multiple Detection Patterns**: 
-  - Excessive request rates (>60,000 req/min = 1000 req/s)
-  - High failure rates (>50% failures)
-  - Persistent rate-limit violations (>90% rate-limited)
-- **Temporary Blocking**: Blocks abusive IPs for 5 minutes (configurable)
-- **Whitelisting**: Supports whitelisting IPs (e.g., localhost for stress testing)
-- **Admin Endpoints**: Check IP status and metrics via `/admin/ip-status`
-
-### Configuration
-
-Configure via environment variables:
+Configurable via environment variable:
 
 ```bash
-# Maximum requests per minute before blocking (default: 60000 = 1000 req/s)
-IP_BLOCKER_MAX_RPM=60000
+# Set rate limit (requests per minute)
+FLASK_RATE_LIMIT=120000  # 2000 req/s
 
-# Maximum failure rate (%) before blocking
-IP_BLOCKER_MAX_FAILURE_RATE=50.0
-
-# Maximum rate-limit rate (%) before blocking
-IP_BLOCKER_MAX_RATE_LIMIT_RATE=90.0
-
-# Block duration in seconds (default: 300 = 5 minutes)
-IP_BLOCKER_DURATION_SECONDS=300
-
-# Whitelist localhost for stress testing (default: true)
-IP_BLOCKER_WHITELIST_LOCALHOST=true
+# Run the app
+python limiter.py
 ```
 
-### How It Works
+Default: 120,000 requests per minute (2000 req/s) per IP address.
 
-1. **Request Tracking**: Tracks metrics per IP over a rolling 60-second window
-2. **Abuse Detection**: Analyzes patterns (rate, failures, rate-limits)
-3. **Automatic Blocking**: Blocks IPs that exceed thresholds
-4. **Response**: Blocked IPs receive 403 Forbidden with unblock time
-
-### For Stress Testing
-
-By default, localhost IPs are whitelisted, so stress tests won't trigger IP blocking. To disable:
-
-```bash
-IP_BLOCKER_WHITELIST_LOCALHOST=false
-```
-
-See [IP_BLOCKING.md](IP_BLOCKING.md) for detailed documentation.
+When rate limit is exceeded, the API returns:
+- **Status**: 429 Too Many Requests
+- **Body**: `{"error": "Rate limit exceeded", "message": "..."}`
 
 ## Project Structure
 
 ```
 api_stress_test/
-├── limiter.py              # Flask app entry point with rate limiting
-├── nginx.conf              # Nginx reverse proxy configuration
-├── requirements.txt        # Python dependencies
-├── README.md              # This file
-├── TESTING.md             # Detailed testing guide
-├── IP_BLOCKING.md         # IP blocking documentation
+├── README.md                   # This file
+├── limiter.py                  # Flask app entry point
+├── requirements.txt            # Python dependencies
+├── diagnose_db.py              # Database diagnostic tool
+├── .env                        # Environment config (create this)
 │
 ├── src/
+│   ├── db/
+│   │   ├── connection.py       # Database connection management
+│   │   ├── pool.py             # Connection pool implementation
+│   │   ├── warrior.py          # Warrior data access functions
+│   │   └── schema.sql          # Database schema
 │   ├── routes/
-│   │   └── warrior_routes.py  # Warrior API endpoints (Blueprint)
-│   ├── security/
-│   │   └── ip_blocker.py     # IP blocking and abuse detection
-│   └── db/
-│       ├── connection.py     # DuckDB connection manager
-│       ├── warrior.py        # Warrior data access functions
-│       └── schema.sql        # Database schema definitions
+│   │   └── warrior_routes.py   # API endpoints
+│   └── security/
+│       └── ip_blocker.py       # IP blocking/abuse detection
 │
 ├── scripts/
-│   ├── deploy_nginx_config.sh  # Deploy nginx.conf to container
-│   └── test_rate_limit.sh      # Simple rate limit test script
+│   ├── test_rate_limit.sh      # Basic API test script
+│   └── deploy_nginx_config.sh  # Nginx deployment script
 │
-├── gatling/               # Gatling stress test suite
-│   ├── build.sbt
-│   ├── README.md
-│   └── src/test/scala/
-│       └── WarriorApiSimulation.scala
+├── api_under_stress/           # Git submodule (Gatling stress tests)
+│   └── stress-test/
+│       ├── run-test.sh         # Run Gatling tests
+│       └── user-files/         # Test scenarios and results
 │
-├── data/                  # Local DuckDB database files
-│   └── app.duckdb
-│
-├── test_rate_limiter.py   # Python test suite
-└── test_connection.py     # Database connection test
+└── data/
+    └── app.duckdb              # Local database file
 ```
-
-## GHCR Nginx Component (Required)
-
-The nginx container from GitHub Container Registry (GHCR) is **required** for all deployments and testing. It provides the first layer of rate limiting and security features.
-
-### Why Nginx is Required
-
-- **Dual-layer rate limiting:** Nginx (1000 req/s) + Flask (60,000 req/min = 1000 req/s)
-- **Production-ready security:** SSL/TLS, security headers, connection limits
-- **Reverse proxy:** Protects Flask app and provides proper HTTP handling
-- **Rate limit testing:** Both limiters must be tested together
-
-### Container Setup
-
-1. **Pull nginx container from GHCR:**
-   ```bash
-   docker pull ghcr.io/your-org/api-stress-test-nginx:latest
-   ```
-
-2. **Deploy configuration:**
-   ```bash
-   ./scripts/deploy_nginx_config.sh api_stress_test_nginx
-   ```
-
-The nginx container provides:
-- **Rate limiting:** 1000 req/s with burst of 200 (first defense)
-- **Connection limits:** Maximum 200 concurrent connections per IP
-- **SSL/TLS termination:** HTTPS support with security headers
-- **Security headers:** HSTS, X-Frame-Options, X-Content-Type-Options, X-XSS-Protection
-- **Reverse proxy:** Forwards requests to Flask app on port 5001
-- **Timeouts:** Protection against slowloris attacks
-- **Body size limit:** 2MB maximum request body size
-- **HTTP/2 support:** Enabled for better performance
-
-### Nginx Configuration Details
-
-The `nginx.conf` file configures:
-- **Rate Limiting:** `limit_req_zone` with 1000 req/s and burst of 200
-- **Connection Limits:** Maximum 200 concurrent connections per IP via `limit_conn_zone`
-- **Security Headers:** All security headers applied to responses
-- **Proxy Settings:** Proper headers forwarded to Flask (X-Real-IP, X-Forwarded-For)
 
 ## Troubleshooting
 
-### Flask App Issues
-
 **Port already in use:**
 ```bash
-# Check what's using the port
-lsof -i :5001
-
-# Kill the process or change port in limiter.py
+lsof -i :5001  # Find process using port
+# Kill process or change PORT env variable
 ```
 
-**Database errors:**
-- Ensure `./data/` directory exists and is writable
-- Check `.env` file if using MotherDuck
-- Verify MOTHERDUCK_TOKEN is set correctly
-
-### Nginx Container Issues
-
-**Container not starting:**
+**Database connection fails:**
 ```bash
-# Check container logs
-docker logs api_stress_test_nginx
+# Run diagnostic
+python diagnose_db.py
 
-# Check if container is running
-docker ps -a | grep api_stress_test_nginx
+# Check environment variables
+cat .env
 
-# Verify nginx config syntax
-docker exec api_stress_test_nginx nginx -t
+# Verify MotherDuck token (if using cloud DB)
 ```
 
-**Container can't connect to Flask:**
-- Ensure Flask app is running on `localhost:5001`
-- Use `--network host` flag when running container, or configure Docker network
-- Check nginx config has correct `proxy_pass http://127.0.0.1:5001`
-
-**SSL certificate errors (for HTTPS):**
-- For local testing, use HTTP on port 80 instead
-- Or modify `nginx.conf` to remove SSL requirements
-- Or generate self-signed certificates:
-  ```bash
-  openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
-    -keyout /path/to/key.pem -out /path/to/cert.pem
-  ```
-
-### Rate Limiting Not Working
-
-**Nginx rate limiting:**
-- Verify `nginx.conf` is deployed correctly: `docker exec api_stress_test_nginx nginx -t`
-- Test with >1000 req/s to trigger nginx limit (e.g., `ab -n 1100 -c 100 http://localhost:80/health`)
-- Check nginx logs: `docker logs api_stress_test_nginx`
-
-**Flask rate limiting:**
-- Check that `flask-limiter` is properly installed
-- Verify Flask app is receiving requests (check Flask logs)
-- Check `FLASK_RATE_LIMIT` environment variable (default: 60000 req/min = 1000 req/s)
-- Test with >60000 requests/min within nginx limits
-
-**Both limiters:**
-- Always test through nginx (`http://localhost:80`), not directly to Flask
-- Nginx limits are checked first, then Flask limits
-
+**Gatling tests fail:**
+- Ensure Flask app is running on port 5001
+- Check Java is installed: `java -version`
+- Verify sbt is installed: `sbt --version`
 
 ## Development
 
 ### Adding New Endpoints
 
-1. Add route functions in `src/routes/warrior_routes.py` or create new Blueprint
-2. Register Blueprint in `limiter.py`
-3. Update tests accordingly
+1. Add route in `src/routes/warrior_routes.py`
+2. Define data access function in `src/db/warrior.py` (if needed)
+3. Update tests
 
-### Database Schema Changes
+### Updating Database Schema
 
 1. Modify `src/db/schema.sql`
 2. Restart Flask app (schema auto-applies on startup)
-3. Or manually apply: `python -c "from src.db.connection import get_connection; with get_connection(read_only=False, apply_schema=True) as con: pass"`
 
 ## License
 
