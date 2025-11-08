@@ -60,7 +60,7 @@ brew install sbt
 
 ### 2. Set Up Database
 
-**Option A: PostgreSQL (Recommended for Production)**
+**Option A: PostgreSQL (Recommended)**
 
 Automated setup with Docker:
 ```bash
@@ -77,7 +77,7 @@ cp .env.example .env
 # Edit .env: Set DB_MODE=postgresql
 ```
 
-**Option B: DuckDB (For Analytics/Testing)**
+**Option B: DuckDB (Legacy: For Analytics/Testing)**
 
 Create a `.env` file:
 ```bash
