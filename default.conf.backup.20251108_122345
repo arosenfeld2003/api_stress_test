@@ -1,0 +1,52 @@
+# Local Testing Nginx Configuration
+# Simplified config for stress testing without SSL
+# Deploy with: ./scripts/deploy_nginx_config.sh api_stress_test_nginx nginx.conf.local
+
+# ----------------------------
+# Rate Limiting & Connection Limits
+# ----------------------------
+limit_req_zone $binary_remote_addr zone=api_limit:10m rate=1000r/s;
+limit_conn_zone $binary_remote_addr zone=conn_limit:10m;
+
+# ----------------------------
+# HTTP Server (no SSL redirect for local testing)
+# ----------------------------
+server {
+    listen 80;
+    server_name localhost;
+
+    # --- Security Headers ---
+    add_header X-Content-Type-Options nosniff;
+    add_header X-Frame-Options DENY;
+    add_header X-XSS-Protection "1; mode=block";
+
+    # --- Timeouts to prevent slowloris ---
+    client_header_timeout 10s;
+    client_body_timeout 10s;
+    keepalive_timeout 30s;
+    send_timeout 20s;
+
+    # --- Body size limit ---
+    client_max_body_size 2M;
+
+    location / {
+        # --- Rate Limiting ---
+        limit_req zone=api_limit burst=200 nodelay;
+        limit_conn conn_limit 200;
+
+        # --- Proxy to Flask app ---
+        # Use host.docker.internal for macOS/Windows, 127.0.0.1 for Linux
+        proxy_pass http://host.docker.internal:5001;
+        
+        # --- Proxy headers ---
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # --- Timeouts ---
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 20s;
+        proxy_read_timeout 30s;
+    }
+}
