@@ -108,12 +108,6 @@ The API runs on `http://localhost:5001`.
 ./scripts/test_rate_limit.sh
 ```
 
-**Stress test with Gatling:**
-```bash
-cd api_under_stress/stress-test
-./run-test.sh
-```
-
 ## API Endpoints
 
 | Method | Endpoint | Purpose |
